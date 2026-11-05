@@ -6,8 +6,7 @@
   //
   // Drawn only while the active tab is a file git counts as changed (the
   // owner's `:if`); it pushes the file down rather than covering its top.
-  const { workspace, readDiff } = await import("@web/lib/workspace.js")
-  const { openDiff } = await import("@web/lib/ui.js")
+  const [{ workspace, readDiff }, { openDiff }] = await C79.importAll(["@web/lib/workspace.js", "@web/lib/ui.js"])
 
   $: tab = workspace.tabs.find(t => t.id === workspace.active) || null
   $: path = tab?.path || ""

@@ -12,7 +12,7 @@
 //    exported with `ts-rs`, this file gets `// @ts-check` against the generated
 //    .d.ts; the templates stay untyped. Nothing here should need a DOM node.
 
-import { $reactive } from "@web/vendor/jq79.js"
+import { $reactive, C79 } from "@web/vendor/jq79.js"
 
 // What this client speaks, sent on connect so a host that speaks something else
 // refuses it out loud rather than by misreading the next message. Kept beside
@@ -1265,8 +1265,7 @@ export async function closeSettings() {
   // The sheets Settings owns go with it. They are mounted *inside* its dialog
   // while it is open and at the top level while it is not, so leaving one set
   // would re-open it as a window of its own the moment this flag flips.
-  const { ui } = await import("@web/lib/ui.js")
-  const { closePicker } = await import("@web/lib/workspace.js")
+  const [{ ui }, { closePicker }] = await C79.importAll(["@web/lib/ui.js", "@web/lib/workspace.js"])
   ui.starter = null
   // Refuses while the first-visit picker is forced, which is the one case
   // where there is nothing behind it to go back to.

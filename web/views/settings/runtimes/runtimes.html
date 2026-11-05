@@ -4,17 +4,29 @@
   // are gone from here since 2026-10-30: a session is made from a runtime, an
   // image and lists. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`
   // and `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
-  const { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, saveImages, saveHostShell, saveDefaultRuntime } =
-    await import("@web/lib/runtimes.js")
-  const { terminal } = await import("@web/lib/terminal.js")
-  const Button = await import("@web/theme/default/components/button.html")
-  const Scrollable = await import("@web/theme/default/components/scrollable.html")
-  const PathText = await import("@web/components/path-text.html")
-  const { state } = await import("@web/lib/store.js")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
-  const Select = await import("@web/theme/default/components/select.html")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const { brandSrc, runtimeBrand, loadBrands } = await import("@web/lib/brands.js")
+  const [
+    { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, saveImages, saveHostShell, saveDefaultRuntime },
+    { terminal },
+    Button,
+    Scrollable,
+    PathText,
+    { state },
+    TextInput,
+    Select,
+    BrandIcon,
+    { brandSrc, runtimeBrand, loadBrands },
+  ] = await C79.importAll([
+    "@web/lib/runtimes.js",
+    "@web/lib/terminal.js",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/scrollable.html",
+    "@web/components/path-text.html",
+    "@web/lib/store.js",
+    "@web/theme/default/components/text-input.html",
+    "@web/theme/default/components/select.html",
+    "@web/components/brand-icon.html",
+    "@web/lib/brands.js",
+  ])
   loadBrands()
   // A runtime's mark, or `null` for the two with none: they are drawn as a box.
   const markOf = runtime => brandSrc(runtimeBrand(runtime))

@@ -15,10 +15,12 @@
   // sentence `the-gate-panel-narrows` wrote one surface along: a narrowing
   // nobody can reach from the surface they actually use is a narrowing nobody
   // applies.
-  const { state, loadResend, saveResend } = await import("@web/lib/store.js")
-  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
-  const SaveButton = await import("@web/components/save-button.html")
-  const PathText = await import("@web/components/path-text.html")
+  const [{ state, loadResend, saveResend }, ChoiceSegmented, SaveButton, PathText] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/theme/default/components/choice-segmented.html",
+    "@web/components/save-button.html",
+    "@web/components/path-text.html",
+  ])
 
   // `""` is drawn as the word it means here.
   const UNSET = { value: "", label: "unset" }

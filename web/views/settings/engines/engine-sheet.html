@@ -10,17 +10,29 @@
   // Nothing starts while something that is not luu's answers on its port: a
   // chat there would talk to that server, whatever it holds. Start offers the
   // first free port instead, which moves the engine and its providers.
-  const { startEngine, loadCatalog, freePort, moveEngine, defaultPort, chatEngine } =
-    await import("@web/lib/engines.js")
-  const { state, newSession, closeSettings } = await import("@web/lib/store.js")
-  const { checkModel } = await import("@web/lib/ui.js")
-  const { brandSrc, modelBrand } = await import("@web/lib/brands.js")
-  const { markdown } = await import("@web/helpers/markdown.js")
-  const SubModal = await import("@web/theme/default/components/sub-modal.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const InputContainer = await import("@web/theme/default/components/input-container.html")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const OriginBadge = await import("@web/components/origin-badge.html")
+  const [
+    { startEngine, loadCatalog, freePort, moveEngine, defaultPort, chatEngine },
+    { state, newSession, closeSettings },
+    { checkModel },
+    { brandSrc, modelBrand },
+    { markdown },
+    SubModal,
+    Button,
+    InputContainer,
+    BrandIcon,
+    OriginBadge,
+  ] = await C79.importAll([
+    "@web/lib/engines.js",
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/lib/brands.js",
+    "@web/helpers/markdown.js",
+    "@web/theme/default/components/sub-modal.html",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/input-container.html",
+    "@web/components/brand-icon.html",
+    "@web/components/origin-badge.html",
+  ])
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it.

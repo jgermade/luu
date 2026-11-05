@@ -3,10 +3,15 @@
   // `target/` in it is not one to walk eagerly, and because the endpoint is
   // one directory wide for the same reason. See
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
-  const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor, glyphFor, renameEntry, FILES_SPRITE } =
-    await import("@web/lib/workspace.js")
-  const { keeper } = await import("@web/helpers/rows.js")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const [
+    { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor, glyphFor, renameEntry, FILES_SPRITE },
+    { keeper },
+    TextInput,
+  ] = await C79.importAll([
+    "@web/lib/workspace.js",
+    "@web/helpers/rows.js",
+    "@web/theme/default/components/text-input.html",
+  ])
 
   // Rooted at the folder somebody chose, which is a subdirectory of the one
   // `luu serve` was started in. Paths stay relative to *that* base throughout —

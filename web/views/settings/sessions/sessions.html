@@ -6,8 +6,10 @@
   // beside the destination and recorded in the stream's header. Each half is
   // still its own component, with its own save, because each writes its own
   // table of `config.toml`.
-  const SettingsResend = await import("./resend.html")
-  const SettingsAuthority = await import("./authority.html")
+  const [SettingsResend, SettingsAuthority] = await C79.importAll([
+    "@web/views/settings/sessions/resend.html",
+    "@web/views/settings/sessions/authority.html",
+  ])
 </script>
 
 <div class="sessions-pane pane-main">

@@ -4,10 +4,12 @@
   // luu dials and what each link may do here; on a server with users it is
   // your keys and the luus they linked. See `@web/lib/remote.js` and
   // `RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md`.
-  const { account } = await import("@web/lib/account.js")
-  const { currentHost, goToHost } = await import("@web/lib/hosts.js")
-  const remote = await import("@web/lib/remote.js")
-  const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
+  const [{ account }, { currentHost, goToHost }, remote, { state, loadProviders, saveProviders }] = await C79.importAll([
+    "@web/lib/account.js",
+    "@web/lib/hosts.js",
+    "@web/lib/remote.js",
+    "@web/lib/store.js",
+  ])
   if (!state.providers) loadProviders()
 
   // What this luu offers the luus linked to it, by provider: everything a

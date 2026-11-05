@@ -3,9 +3,11 @@
   // the way an engine is over Settings. A host is another `luu serve`; this
   // server forwards to it with the token in the file named here, which the
   // page never reads. See `crate::hosts`.
-  const { saveHosts, askHost } = await import("@web/lib/hosts.js")
-  const Modal = await import("@web/components/modal.html")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
+  const [{ saveHosts, askHost }, Modal, TextInput] = await C79.importAll([
+    "@web/lib/hosts.js",
+    "@web/components/modal.html",
+    "@web/theme/default/components/text-input.html",
+  ])
 
   // False once it should leave: `Modal` plays the exit, then `close` unmounts.
   let open = true

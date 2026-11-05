@@ -6,29 +6,48 @@
   // table have nothing to do with each other, and stacking them made the second
   // one the reward for scrolling past the first. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { closeSettings, state } = await import("@web/lib/store.js")
-  const { ui } = await import("@web/lib/ui.js")
-  const Modal = await import("@web/components/modal.html")
-  // Mounted here as well as in `app.html`, and the duplication is the point:
-  // `Modal` decides it is a child by looking for an open `dialog.modal` above
-  // it **in the DOM**, so the same component is a sheet inside Settings here
-  // and a window of its own there. Both are reached from Settings, so opened
-  // from it they belong in it.
-  const SessionsDialog = await import("@web/views/chat/sessions-dialog.html")
-  const Project = await import("@web/views/inspector/tree/project.html")
-  const { workspace } = await import("@web/lib/workspace.js")
-
-  const SettingsGeneral = await import("./general/general.html")
-  const SettingsAppearance = await import("./appearance/appearance.html")
-  const SettingsModels = await import("./models/models.html")
-  const SettingsEngines = await import("./engines/engines.html")
-  const SettingsRuntimes = await import("./runtimes/runtimes.html")
-  const SettingsSessions = await import("./sessions/sessions.html")
-  const SettingsPolicies = await import("./policies/policies.html")
-  const SettingsRemote = await import("./remote/remote.html")
-  const SettingsUsers = await import("./users/users.html")
-  const Rail = await import("@web/components/rail.html")
-  const { account, managesPeople } = await import("@web/lib/account.js")
+  // `SessionsDialog` and `Project` are mounted here as well as in `app.html`,
+  // and the duplication is the point: `Modal` decides it is a child by looking
+  // for an open `dialog.modal` above it **in the DOM**, so the same component
+  // is a sheet inside Settings here and a window of its own there. Both are
+  // reached from Settings, so opened from it they belong in it.
+  const [
+    { closeSettings, state },
+    { ui },
+    Modal,
+    SessionsDialog,
+    Project,
+    { workspace },
+    SettingsGeneral,
+    SettingsAppearance,
+    SettingsModels,
+    SettingsEngines,
+    SettingsRuntimes,
+    SettingsSessions,
+    SettingsPolicies,
+    SettingsRemote,
+    SettingsUsers,
+    Rail,
+    { account, managesPeople },
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/components/modal.html",
+    "@web/views/chat/sessions-dialog.html",
+    "@web/views/inspector/tree/project.html",
+    "@web/lib/workspace.js",
+    "@web/views/settings/general/general.html",
+    "@web/views/settings/appearance/appearance.html",
+    "@web/views/settings/models/models.html",
+    "@web/views/settings/engines/engines.html",
+    "@web/views/settings/runtimes/runtimes.html",
+    "@web/views/settings/sessions/sessions.html",
+    "@web/views/settings/policies/policies.html",
+    "@web/views/settings/remote/remote.html",
+    "@web/views/settings/users/users.html",
+    "@web/components/rail.html",
+    "@web/lib/account.js",
+  ])
 
   const SECTIONS = [
     // Engines before Models: a provider can name an engine, so the thing it

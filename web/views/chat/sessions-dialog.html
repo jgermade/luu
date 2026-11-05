@@ -6,20 +6,34 @@
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`, and for what
   // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
-  const { state, resumeSession, deleteSession, archiveSession, sleepSession, refreshSessionsList, offeredProviders } = await import("@web/lib/store.js")
-  const {
-    ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
-    chooseRuntime, chooseList,
-  } = await import("@web/lib/ui.js")
-  const { runtimeOptions, placeMark } = await import("@web/lib/places.js")
-  const TabModal = await import("@web/theme/default/components/tab-modal.html")
-  const InputContainer = await import("@web/theme/default/components/input-container.html")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const SubModal = await import("@web/theme/default/components/sub-modal.html")
-  const ProviderModels = await import("./provider-models.html")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const { loadBrands } = await import("@web/lib/brands.js")
+  const [
+    { state, resumeSession, deleteSession, archiveSession, sleepSession, refreshSessionsList, offeredProviders },
+    {
+      ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
+      chooseRuntime, chooseList,
+    },
+    { runtimeOptions, placeMark },
+    TabModal,
+    InputContainer,
+    TextInput,
+    Button,
+    SubModal,
+    ProviderModels,
+    BrandIcon,
+    { loadBrands },
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/lib/places.js",
+    "@web/theme/default/components/tab-modal.html",
+    "@web/theme/default/components/input-container.html",
+    "@web/theme/default/components/text-input.html",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/sub-modal.html",
+    "@web/views/chat/provider-models.html",
+    "@web/components/brand-icon.html",
+    "@web/lib/brands.js",
+  ])
   loadBrands()
 
   // Three tabs: start one, the earlier ones, and the ones put away. An

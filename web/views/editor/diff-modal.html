@@ -3,10 +3,12 @@
   // the file on screen. The diff tab is still there for reading a diff at the
   // column's width; this is the glance. See
   // `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
-  const { workspace, readDiff } = await import("@web/lib/workspace.js")
-  const { ui, closeDiff } = await import("@web/lib/ui.js")
-  const Modal = await import("@web/components/modal.html")
-  const Hunks = await import("./hunks.html")
+  const [{ workspace, readDiff }, { ui, closeDiff }, Modal, Hunks] = await C79.importAll([
+    "@web/lib/workspace.js",
+    "@web/lib/ui.js",
+    "@web/components/modal.html",
+    "@web/views/editor/hunks.html",
+  ])
 
   // Git's two columns: the index, then the working tree. The side that opens
   // is the one with something in it — a file staged whole has no working-tree

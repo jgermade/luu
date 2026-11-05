@@ -12,11 +12,19 @@
   // Drawn as cards that fold, each saying in one phrase what it holds while it
   // is folded, and the budget as a share of the window rather than of itself.
   // See `RECORD/2026-10-14.the-debug-panel-in-cards.completed.md`.
-  const { state, panel, selectTurn } = await import("@web/lib/store.js")
-  const Scrollable = await import("@web/theme/default/components/scrollable.html")
-  const Card = await import("@web/views/inspector/debug/card.html")
-  const { showDebug } = await import("@web/lib/workspace.js")
-  const { paint, group, split, withSpecs, contents, ORDER } = await import("@web/helpers/prompt-parts.js")
+  const [
+    { state, panel, selectTurn },
+    Scrollable,
+    Card,
+    { showDebug },
+    { paint, group, split, withSpecs, contents, ORDER },
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/theme/default/components/scrollable.html",
+    "@web/views/inspector/debug/card.html",
+    "@web/lib/workspace.js",
+    "@web/helpers/prompt-parts.js",
+  ])
 
   // The one thing a 20rem rail has never been able to show: a prompt, at the
   // width it was written for. `showDebug` opens it as a tab in the content

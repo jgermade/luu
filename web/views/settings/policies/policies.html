@@ -14,11 +14,13 @@
   // is not there. A list an environment names cannot be deleted — the button
   // says which. What was saved is what the next session runs under; the live
   // one keeps what it was built with.
-  const { loadPolicies, savePolicies } = await import("@web/lib/policies.js")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
-  const Select = await import("@web/theme/default/components/select.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const SaveButton = await import("@web/components/save-button.html")
+  const [{ loadPolicies, savePolicies }, TextInput, Select, Button, SaveButton] = await C79.importAll([
+    "@web/lib/policies.js",
+    "@web/theme/default/components/text-input.html",
+    "@web/theme/default/components/select.html",
+    "@web/theme/default/components/button.html",
+    "@web/components/save-button.html",
+  ])
 
   const KINDS = [
     { key: "shell", label: "Shell", what: "Programs run_command may run, by name. One in neither zone is asked of you.", placeholder: "a program" },

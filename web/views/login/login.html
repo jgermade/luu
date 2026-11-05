@@ -4,9 +4,13 @@
   // server knows who this is — every route behind the login would be a 401.
   // See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`; passkeys,
   // first and with no email, in `RECORD/2026-11-05.passkeys.completed.md`.
-  const { logIn, emailCode, account, passkeysHere, logInWithPasskey, addPasskey, deviceName } =
-    await import("@web/lib/account.js")
-  const OtpInput = await import("@web/components/otp-input.html")
+  const [
+    { logIn, emailCode, account, passkeysHere, logInWithPasskey, addPasskey, deviceName },
+    OtpInput,
+  ] = await C79.importAll([
+    "@web/lib/account.js",
+    "@web/components/otp-input.html",
+  ])
   const withPasskeys = passkeysHere()
 
   let email = ""

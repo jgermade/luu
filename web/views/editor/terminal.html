@@ -10,8 +10,10 @@
   //
   // Its top edge is dragged, as a column's side is: the height is
   // `--terminal-h` on `.app`, kept in `localStorage` (`lib/resize.js`).
-  const { terminal, attach } = await import("@web/lib/terminal.js")
-  const { startTerminalDrag, nudgeTerminal, resetTerminalHeight } = await import("@web/lib/resize.js")
+  const [{ terminal, attach }, { startTerminalDrag, nudgeTerminal, resetTerminalHeight }] = await C79.importAll([
+    "@web/lib/terminal.js",
+    "@web/lib/resize.js",
+  ])
 
   await $mounted()
   // The host is a plain element xterm draws into, attached by hand for the

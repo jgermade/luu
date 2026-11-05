@@ -13,6 +13,17 @@
 </head>
 <body>
 <main id="app"></main>
+<!-- Until `#app` has an element in it: `app.css` hides it then. -->
+<div class="boot" role="status" aria-label="Loading luu">
+  <svg viewBox="0 0 512 512" aria-hidden="true">
+    <rect width="512" height="512" fill="#12161c" rx="112"/>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="40">
+      <path class="boot-l" stroke="#f5a524" pathLength="1" d="M116 150v210"/>
+      <path class="boot-u" stroke="#f2f4f7" pathLength="1" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/>
+    </g>
+    <circle class="boot-dot" cx="356" cy="296" r="13" fill="#f5a524"/>
+  </svg>
+</div>
 <!-- `@web/` is this folder, from wherever the importing file sits — so no
      import climbs with `../`. Before the first module script, which is the
      only place an import map is honoured. -->

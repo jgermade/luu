@@ -8,11 +8,13 @@
   // with less. Nothing is fetched: it is the budget and the prompt the trace
   // channel sent, and the turns `keepTurn` or a reload put in `state.history`.
   // See `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  const { state } = await import("@web/lib/store.js")
-  const { closeContext, closeInspect } = await import("@web/lib/ui.js")
-  const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
-  const Modal = await import("@web/components/modal.html")
-  const ContextView = await import("./context-view.html")
+  const [{ state }, { closeContext, closeInspect }, { timing, seconds, speedLabel }, Modal, ContextView] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/helpers/timing.js",
+    "@web/components/modal.html",
+    "@web/views/chat/context-view.html",
+  ])
 
   // What the modal is about, read out of the store wherever it is used and
   // copied nowhere: a fresh object every call, so nothing that belongs to

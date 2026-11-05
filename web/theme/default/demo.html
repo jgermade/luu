@@ -6,33 +6,40 @@
   //
   // The page imports the components and nothing of the app's: no store, no
   // `app.css`. What it shows is the theme alone.
-  const Button = await import("@theme/components/button.html")
-  const Badge = await import("@theme/components/badge.html")
-  const Card = await import("@theme/components/card.html")
-  const Alert = await import("@theme/components/alert.html")
-  const Progress = await import("@theme/components/progress.html")
-  const Spinner = await import("@theme/components/spinner.html")
-  const Kbd = await import("@theme/components/kbd.html")
-  const TextInput = await import("@theme/components/text-input.html")
-  const Textarea = await import("@theme/components/textarea.html")
-  const Select = await import("@theme/components/select.html")
-  const Checkbox = await import("@theme/components/checkbox.html")
-  const RadioGroup = await import("@theme/components/radio-group.html")
-  const Switch = await import("@theme/components/switch.html")
-  const ChoiceSegmented = await import("@theme/components/choice-segmented.html")
-  const Field = await import("@theme/components/field.html")
-  const Tabs = await import("@theme/components/tabs.html")
-  const Menu = await import("@theme/components/menu.html")
-  const Modal = await import("@theme/components/modal.html")
-  const Tooltip = await import("@theme/components/tooltip.html")
-  const InputContainer = await import("@theme/components/input-container.html")
-  const Typeahead = await import("@theme/components/typeahead.html")
-  const TypeaheadContainer = await import("@theme/components/typeahead-container.html")
-  const Section = await import("@theme/components/section.html")
-  const Scrollable = await import("@theme/components/scrollable.html")
-  const AnchorNav = await import("@theme/components/anchor-nav.html")
-  const TabModal = await import("@theme/components/tab-modal.html")
-  const SubModal = await import("@theme/components/sub-modal.html")
+  const [
+    Button, Badge, Card, Alert, Progress, Spinner, Kbd,
+    TextInput, Textarea, Select, Checkbox, RadioGroup, Switch, ChoiceSegmented, Field,
+    Tabs, Menu, Modal, Tooltip, InputContainer, Typeahead, TypeaheadContainer,
+    Section, Scrollable, AnchorNav, TabModal, SubModal,
+  ] = await C79.importAll([
+    "@theme/components/button.html",
+    "@theme/components/badge.html",
+    "@theme/components/card.html",
+    "@theme/components/alert.html",
+    "@theme/components/progress.html",
+    "@theme/components/spinner.html",
+    "@theme/components/kbd.html",
+    "@theme/components/text-input.html",
+    "@theme/components/textarea.html",
+    "@theme/components/select.html",
+    "@theme/components/checkbox.html",
+    "@theme/components/radio-group.html",
+    "@theme/components/switch.html",
+    "@theme/components/choice-segmented.html",
+    "@theme/components/field.html",
+    "@theme/components/tabs.html",
+    "@theme/components/menu.html",
+    "@theme/components/modal.html",
+    "@theme/components/tooltip.html",
+    "@theme/components/input-container.html",
+    "@theme/components/typeahead.html",
+    "@theme/components/typeahead-container.html",
+    "@theme/components/section.html",
+    "@theme/components/scrollable.html",
+    "@theme/components/anchor-nav.html",
+    "@theme/components/tab-modal.html",
+    "@theme/components/sub-modal.html",
+  ])
 
   // The sections in groups, as the index lists them and the page draws them:
   // a group is a heading over its sections, in both.

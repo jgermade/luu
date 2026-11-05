@@ -13,11 +13,19 @@
   // back marked rather than dropped; **Policies**, the lists and what a draft
   // does without asking. Nothing here changes a list: that is Settings' (row
   // 51 of the roadmap).
-  const { state, revokeGrant } = await import("@web/lib/store.js")
-  const { ui, closePermissions, showPermissionsTab, permissionsToSettings } = await import("@web/lib/ui.js")
-  const TabModal = await import("@web/theme/default/components/tab-modal.html")
-  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
-  const Button = await import("@web/theme/default/components/button.html")
+  const [
+    { state, revokeGrant },
+    { ui, closePermissions, showPermissionsTab, permissionsToSettings },
+    TabModal,
+    ChoiceSegmented,
+    Button,
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/theme/default/components/tab-modal.html",
+    "@web/theme/default/components/choice-segmented.html",
+    "@web/theme/default/components/button.html",
+  ])
 
   $: tab = ui.permissions || "activity"
 

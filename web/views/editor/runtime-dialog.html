@@ -11,14 +11,25 @@
   // is: what the model installed where the session runs now does not come
   // along, and a container the session leaves goes with everything in it. The
   // box says that about the two places chosen, and *Move* waits for it.
-  const { terminal, moveSession, moveRuntime } = await import("@web/lib/terminal.js")
-  const { state } = await import("@web/lib/store.js")
-  const Modal = await import("@web/theme/default/components/modal.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const Checkbox = await import("@web/theme/default/components/checkbox.html")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const { placeOptions, livePlace, hereOption, placeMark, runtimeOptions, carriesLists } = await import("@web/lib/places.js")
-  const { loadBrands } = await import("@web/lib/brands.js")
+  const [
+    { terminal, moveSession, moveRuntime },
+    { state },
+    Modal,
+    Button,
+    Checkbox,
+    BrandIcon,
+    { placeOptions, livePlace, hereOption, placeMark, runtimeOptions, carriesLists },
+    { loadBrands },
+  ] = await C79.importAll([
+    "@web/lib/terminal.js",
+    "@web/lib/store.js",
+    "@web/theme/default/components/modal.html",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/checkbox.html",
+    "@web/components/brand-icon.html",
+    "@web/lib/places.js",
+    "@web/lib/brands.js",
+  ])
   loadBrands()
 
   // False once it should leave: `Modal` plays the exit, then `close`

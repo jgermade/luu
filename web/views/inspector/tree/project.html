@@ -20,11 +20,19 @@
   // and choosing it ends by loading the page there: a session stays on the
   // host that made it, so the page goes to the session rather than the other
   // way round.
-  const { workspace, chooseRoot, closePicker, rootKey, FILES_SPRITE } = await import("@web/lib/workspace.js")
-  const { currentHost, loadHosts, askHost, goToHost } = await import("@web/lib/hosts.js")
-  const { openSettingsAt } = await import("@web/lib/ui.js")
-  const Modal = await import("@web/components/modal.html")
-  const HostForm = await import("./host-form.html")
+  const [
+    { workspace, chooseRoot, closePicker, rootKey, FILES_SPRITE },
+    { currentHost, loadHosts, askHost, goToHost },
+    { openSettingsAt },
+    Modal,
+    HostForm,
+  ] = await C79.importAll([
+    "@web/lib/workspace.js",
+    "@web/lib/hosts.js",
+    "@web/lib/ui.js",
+    "@web/components/modal.html",
+    "@web/views/inspector/tree/host-form.html",
+  ])
 
   // `[host.*]`, as this server answers it. A static copy of the page has no
   // `/api/hosts`, and then there is this machine alone.

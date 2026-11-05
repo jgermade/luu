@@ -10,19 +10,32 @@
   // where its binary comes from — `luu:` for luu's own copy, which it can
   // install and uninstall, `system` for one it found. See
   // `RECORD/2026-10-26.engines-found-used-and-owned.completed.md`.
-  const { loadEngines, saveEngines, stopEngine, installEngine, uninstallEngine,
-          tableOf, profileFor } = await import("@web/lib/engines.js")
-  const SubModal = await import("@web/theme/default/components/sub-modal.html")
-  const Switch = await import("@web/theme/default/components/switch.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const PathText = await import("@web/components/path-text.html")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const { brandSrc, engineBrand, loadBrands } = await import("@web/lib/brands.js")
+  const [
+    { loadEngines, saveEngines, stopEngine, installEngine, uninstallEngine, tableOf, profileFor },
+    SubModal,
+    Switch,
+    Button,
+    PathText,
+    BrandIcon,
+    { brandSrc, engineBrand, loadBrands },
+    { state, loadProviders, saveProviders },
+    { ui },
+    EngineForm,
+    EngineSheet,
+  ] = await C79.importAll([
+    "@web/lib/engines.js",
+    "@web/theme/default/components/sub-modal.html",
+    "@web/theme/default/components/switch.html",
+    "@web/theme/default/components/button.html",
+    "@web/components/path-text.html",
+    "@web/components/brand-icon.html",
+    "@web/lib/brands.js",
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/views/settings/engines/engine-form.html",
+    "@web/views/settings/engines/engine-sheet.html",
+  ])
   loadBrands()
-  const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
-  const { ui } = await import("@web/lib/ui.js")
-  const EngineForm = await import("./engine-form.html")
-  const EngineSheet = await import("./engine-sheet.html")
 
   let view = null
   let error = ""

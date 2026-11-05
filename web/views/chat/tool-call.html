@@ -12,10 +12,12 @@
   // `grouped` — drawn as one row of a run of calls (`tool-group.html`),
   // which is the box, rather than as a box of its own.
 
-  const Scrollable = await import("@web/theme/default/components/scrollable.html")
-  const Checkbox = await import("@web/theme/default/components/checkbox.html")
-  const { answerCall } = await import("@web/lib/store.js")
-  const { readLines } = await import("@web/helpers/calls.js")
+  const [Scrollable, Checkbox, { answerCall }, { readLines }] = await C79.importAll([
+    "@web/theme/default/components/scrollable.html",
+    "@web/theme/default/components/checkbox.html",
+    "@web/lib/store.js",
+    "@web/helpers/calls.js",
+  ])
 
   let open = false
 

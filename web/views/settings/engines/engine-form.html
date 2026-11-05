@@ -19,15 +19,25 @@
   // again: see `accepts_from_page` in `crate::engines`. `found` — `{ kind,
   // path, name }`, a binary the machine has that no table runs yet: the form
   // opens on it, under the name its card showed.
-  const { saveEngines, installEngine, renameEngine, loadEngines, profileFor, defaultPort, freePort, tableOf } =
-    await import("@web/lib/engines.js")
-  const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
-  const SubModal = await import("@web/theme/default/components/sub-modal.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const InputContainer = await import("@web/theme/default/components/input-container.html")
-  const Checkbox = await import("@web/theme/default/components/checkbox.html")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const { brandSrc, engineBrand, loadBrands } = await import("@web/lib/brands.js")
+  const [
+    { saveEngines, installEngine, renameEngine, loadEngines, profileFor, defaultPort, freePort, tableOf },
+    { state, loadProviders, saveProviders },
+    SubModal,
+    Button,
+    InputContainer,
+    Checkbox,
+    BrandIcon,
+    { brandSrc, engineBrand, loadBrands },
+  ] = await C79.importAll([
+    "@web/lib/engines.js",
+    "@web/lib/store.js",
+    "@web/theme/default/components/sub-modal.html",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/input-container.html",
+    "@web/theme/default/components/checkbox.html",
+    "@web/components/brand-icon.html",
+    "@web/lib/brands.js",
+  ])
   loadBrands()
 
   // False once it should leave: `SubModal` plays the exit, then `close`

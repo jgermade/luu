@@ -12,11 +12,19 @@
   // its mark and its name; the dialog (`runtime-dialog.html`, mounted at the
   // page's root so it takes the page's tone) chooses another. See
   // `RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md`.
-  const { terminal, restartTerminal } = await import("@web/lib/terminal.js")
-  const { state, loadPostures } = await import("@web/lib/store.js")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const { hereOption: placeHere, placeMark } = await import("@web/lib/places.js")
-  const { loadBrands } = await import("@web/lib/brands.js")
+  const [
+    { terminal, restartTerminal },
+    { state, loadPostures },
+    BrandIcon,
+    { hereOption: placeHere, placeMark },
+    { loadBrands },
+  ] = await C79.importAll([
+    "@web/lib/terminal.js",
+    "@web/lib/store.js",
+    "@web/components/brand-icon.html",
+    "@web/lib/places.js",
+    "@web/lib/brands.js",
+  ])
   loadBrands()
 
   if (!state.postures) loadPostures()

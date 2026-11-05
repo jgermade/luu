@@ -8,11 +8,13 @@
   // are the same 40px. This file draws what is inside the box. See
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { workspace } = await import("@web/lib/workspace.js")
-  const { prefs, monacoAvailable } = await import("@web/lib/prefs.js")
-  const { paint, dispose, textOf } = await import("./monaco.js")
-  const { paintFile } = await import("./rows.js")
-  const Hunks = await import("./hunks.html")
+  const [{ workspace }, { prefs, monacoAvailable }, { paint, dispose, textOf }, { paintFile }, Hunks] = await C79.importAll([
+    "@web/lib/workspace.js",
+    "@web/lib/prefs.js",
+    "@web/views/editor/monaco.js",
+    "@web/views/editor/rows.js",
+    "@web/views/editor/hunks.html",
+  ])
 
   $: shown = workspace.content
   // `picked` rather than `selected`, and the name is load-bearing: a scope

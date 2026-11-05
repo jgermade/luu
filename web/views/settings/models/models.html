@@ -9,13 +9,23 @@
   // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`,
   // `RECORD/2026-10-26.models-laid-out-as-a-new-session.completed.md` and
   // `RECORD/2026-10-26.models-a-click-is-the-default.completed.md`.
-  const { state, saveProviders, loadProviders, refreshSettings, providerWhere } = await import("@web/lib/store.js")
-  const PathText = await import("@web/components/path-text.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const SubModal = await import("@web/theme/default/components/sub-modal.html")
-  const { openStarter } = await import("@web/lib/ui.js")
-  const ProviderForm = await import("./provider-form.html")
-  const ProviderModels = await import("@web/views/chat/provider-models.html")
+  const [
+    { state, saveProviders, loadProviders, refreshSettings, providerWhere },
+    PathText,
+    Button,
+    SubModal,
+    { openStarter },
+    ProviderForm,
+    ProviderModels,
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/components/path-text.html",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/sub-modal.html",
+    "@web/lib/ui.js",
+    "@web/views/settings/models/provider-form.html",
+    "@web/views/chat/provider-models.html",
+  ])
 
   // **Asked here, awaited here.** `openSettings` only sets the flag that mounts
   // this component, so the data is fetched by the section that draws it — and

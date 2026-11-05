@@ -1,27 +1,99 @@
 <script :setup>
-  // A setup script takes `await import(...)`; a static `import` statement is
-  // for factory scripts only.
-  const { state, connect, send, cancel, playFixture, foldTranscript,
-          approvePlan, declinePlan, requestPlan, closeJob, reopenJob, revokeGrant,
-          renameSession, extendLimit,
-          loadProviders, refreshSettings } = await import("@web/lib/store.js")
-  const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
-  const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
-  const { workspace, loadRoot, followFolder, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
-    await import("@web/lib/workspace.js")
-  const { ui, openSettingsAt, openStarter, openHistory, checkModel,
-          watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
-          openPermissions } = await import("@web/lib/ui.js")
-  const { terminal, followSession } = await import("@web/lib/terminal.js")
-  const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
-  const { modelLabel } = await import("@web/lib/engines.js")
-  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
-  const Dropup = await import("@web/components/dropup.html")
+  // A setup script has no static `import`. `C79.importAll` asks for every
+  // file at once — one round trip over HTTP/2 instead of one per `await`.
+  // An `.html` comes back as the component itself, not a module namespace.
+  // The panes' contents and the page's modals are each their own file — see
+  // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  // `app.html` keeps the shell: the grid, the three columns' chrome, and the
+  // chat. What fills a column, and every dialog, is its own component.
+  const [
+    { state, connect, send, cancel, playFixture, foldTranscript,
+      approvePlan, declinePlan, requestPlan, closeJob, reopenJob, revokeGrant,
+      renameSession, extendLimit,
+      loadProviders, refreshSettings },
+    { prefs, setPane, setInspector, setConfirm },
+    { startDrag, nudge, resetWidth, widthStyle },
+    { workspace, loadRoot, followFolder, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor },
+    { ui, openSettingsAt, openStarter, openHistory, checkModel,
+      watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal,
+      openPermissions },
+    { terminal, followSession },
+    { timing, seconds, speedLabel },
+    { modelLabel },
+    ChoiceSegmented,
+    Dropup,
+    { keyAsked },
+    { account: me },
+    InspectorDebug,
+    InspectorFiles,
+    InspectorGit,
+    ContentViewer,
+    Project,
+    { currentHost },
+    SettingsModal,
+    ModelPicker,
+    SessionsDialog,
+    ToolCall,
+    ToolGroup,
+    ContextModal,
+    PermissionsDialog,
+    DiffModal,
+    DiffStrip,
+    SnippetPreview,
+    TerminalPanel,
+    TerminalFoot,
+    RuntimeDialog,
+    Menu,
+    { segments, runs },
+    { keeper },
+    { snippets },
+    { markdown },
+    Scrollable,
+    { snippet, snippetHtml, copySnippet, previewable, previewSnippet },
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/prefs.js",
+    "@web/lib/resize.js",
+    "@web/lib/workspace.js",
+    "@web/lib/ui.js",
+    "@web/lib/terminal.js",
+    "@web/helpers/timing.js",
+    "@web/lib/engines.js",
+    "@web/theme/default/components/choice-segmented.html",
+    "@web/components/dropup.html",
+    "@web/lib/remote.js",
+    "@web/lib/account.js",
+    "@web/views/inspector/debug/debug.html",
+    "@web/views/inspector/tree/tree.html",
+    "@web/views/inspector/version-control/version-control.html",
+    "@web/views/editor/editor.html",
+    "@web/views/inspector/tree/project.html",
+    "@web/lib/hosts.js",
+    "@web/views/settings/settings.html",
+    "@web/views/chat/model-picker.html",
+    "@web/views/chat/sessions-dialog.html",
+    "@web/views/chat/tool-call.html",
+    "@web/views/chat/tool-group.html",
+    "@web/views/chat/context-modal.html",
+    "@web/views/chat/permissions-dialog.html",
+    "@web/views/editor/diff-modal.html",
+    "@web/views/editor/diff-strip.html",
+    "@web/views/chat/snippet-preview.html",
+    "@web/views/editor/terminal.html",
+    "@web/views/editor/terminal-foot.html",
+    "@web/views/editor/runtime-dialog.html",
+    "@web/theme/default/components/menu.html",
+    "@web/helpers/segments.js",
+    "@web/helpers/rows.js",
+    "@web/helpers/snippets.js",
+    "@web/helpers/markdown.js",
+    "@web/theme/default/components/scrollable.html",
+    "@web/lib/snippet.js",
+  ])
   // A key another luu asked this account to add (`?add-key=`): Remote access
   // opens with it filled in, for the person to add or not. See
   // `@web/lib/remote.js`.
-  const { keyAsked } = await import("@web/lib/remote.js")
-  const { account: me } = await import("@web/lib/account.js")
   if (me.users && me.loggedIn && keyAsked()) openSettingsAt("remote")
 
   // The gate's two narrowings. `null` is *leave*, which is what almost every
@@ -42,45 +114,11 @@
     { value: "auto", label: "Auto", title: "This page approves each proposal as it arrives" },
   ]
 
-  // The panes' contents and the page's modals, each its own file — see
-  // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
-  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  // `app.html` keeps the shell: the grid, the three columns' chrome, and the
-  // chat. What fills a column, and every dialog, is its own component.
-  //
-  // `await import` for the same reason the line above it uses one: a setup
-  // script has no static `import`. jq79's loader answers an `.html`
-  // specifier with the component itself, not a module namespace, so there is
-  // nothing to destructure off it.
-  const InspectorDebug = await import("@web/views/inspector/debug/debug.html")
-  const InspectorFiles = await import("@web/views/inspector/tree/tree.html")
-  const InspectorGit = await import("@web/views/inspector/version-control/version-control.html")
-  const ContentViewer = await import("@web/views/editor/editor.html")
-  const Project = await import("@web/views/inspector/tree/project.html")
-  const { currentHost } = await import("@web/lib/hosts.js")
-  const SettingsModal = await import("@web/views/settings/settings.html")
-  const ModelPicker = await import("@web/views/chat/model-picker.html")
-  const SessionsDialog = await import("@web/views/chat/sessions-dialog.html")
-  const ToolCall = await import("@web/views/chat/tool-call.html")
-  const ToolGroup = await import("@web/views/chat/tool-group.html")
-  const ContextModal = await import("@web/views/chat/context-modal.html")
-  const PermissionsDialog = await import("@web/views/chat/permissions-dialog.html")
   // What a person answered for the session and has not taken back: under the
   // draft line, a yes and a no each with its ×. The whole list, taken back
   // included, is the Permissions dialog's.
   $: allowedNow = state.grants.filter(grant => grant.allow !== false && !grant.revoked)
   $: forbiddenNow = state.grants.filter(grant => grant.allow === false && !grant.revoked)
-  const DiffModal = await import("@web/views/editor/diff-modal.html")
-  const DiffStrip = await import("@web/views/editor/diff-strip.html")
-  const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
-  const TerminalPanel = await import("@web/views/editor/terminal.html")
-  const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
-  const RuntimeDialog = await import("@web/views/editor/runtime-dialog.html")
-  const Menu = await import("@web/theme/default/components/menu.html")
-  const { segments, runs } = await import("@web/helpers/segments.js")
-  const { keeper } = await import("@web/helpers/rows.js")
-  const { snippets } = await import("@web/helpers/snippets.js")
-  const { markdown } = await import("@web/helpers/markdown.js")
   // A link in a reply opens beside luu, never in its place: jq79's `:html`
   // keeps an `<a>`'s `href` and not its `target`, and a click that left the
   // page would leave the session with it.
@@ -90,8 +128,6 @@
     event.preventDefault()
     window.open(link.href, "_blank", "noopener,noreferrer")
   }
-  const Scrollable = await import("@web/theme/default/components/scrollable.html")
-  const { snippet, snippetHtml, copySnippet, previewable, previewSnippet } = await import("@web/lib/snippet.js")
 
   connect()
 

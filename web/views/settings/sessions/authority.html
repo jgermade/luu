@@ -8,11 +8,13 @@
   // a draft that tries to write discovered the floor by being refused, and a
   // refusal is a turn. See
   // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
-  const { state, loadAuthority, saveAuthority } = await import("@web/lib/store.js")
-  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
-  const SaveButton = await import("@web/components/save-button.html")
-  const PathText = await import("@web/components/path-text.html")
-  const Textarea = await import("@web/theme/default/components/textarea.html")
+  const [{ state, loadAuthority, saveAuthority }, ChoiceSegmented, SaveButton, PathText, Textarea] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/theme/default/components/choice-segmented.html",
+    "@web/components/save-button.html",
+    "@web/components/path-text.html",
+    "@web/theme/default/components/textarea.html",
+  ])
 
   const POSITIONS = [{ value: "", label: "system (default)" }, "prompt"]
 

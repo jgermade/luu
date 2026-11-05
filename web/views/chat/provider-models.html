@@ -24,11 +24,19 @@
   // right after the name, that emits `edit`. All three list the same
   // providers: a provider whose engine is switched off in Engines is in none
   // of them.
-  const { state, providerModels, offeredProviders, profileOf } = await import("@web/lib/store.js")
-  const { modelLabel } = await import("@web/lib/engines.js")
-  const { brandSrc, providerBrand, modelBrand, loadBrands } = await import("@web/lib/brands.js")
-  const BrandIcon = await import("@web/components/brand-icon.html")
-  const OriginBadge = await import("@web/components/origin-badge.html")
+  const [
+    { state, providerModels, offeredProviders, profileOf },
+    { modelLabel },
+    { brandSrc, providerBrand, modelBrand, loadBrands },
+    BrandIcon,
+    OriginBadge,
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/engines.js",
+    "@web/lib/brands.js",
+    "@web/components/brand-icon.html",
+    "@web/components/origin-badge.html",
+  ])
   // Each provider and model wears its brand's mark where one is known — see
   // `lib/brands.js`, which also says where the marks are drawn from.
   loadBrands()

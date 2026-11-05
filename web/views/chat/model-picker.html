@@ -18,11 +18,17 @@
   // answers as soon as the session points there, the menu closes, and the
   // button says `loading 12s` until the engine answers — see `watchEngine`.
   // A turn sent before then waits for it on the server.
-  const { state, loadProviders, providerModels, newSession, resumeSession, offeredProviders } =
-    await import("@web/lib/store.js")
-  const { ui, checkModel, openSettingsAt, switching: leavingFrom } = await import("@web/lib/ui.js")
-  const { modelLabel } = await import("@web/lib/engines.js")
-  const ProviderModels = await import("./provider-models.html")
+  const [
+    { state, loadProviders, providerModels, newSession, resumeSession, offeredProviders },
+    { ui, checkModel, openSettingsAt, switching: leavingFrom },
+    { modelLabel },
+    ProviderModels,
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/ui.js",
+    "@web/lib/engines.js",
+    "@web/views/chat/provider-models.html",
+  ])
 
   let open = false
   // Where the menu goes: fixed, from the button's own box, because the chat

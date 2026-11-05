@@ -6,15 +6,21 @@
   // from, and one server answers two people on two machines. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
-  const { prefs, setTheme, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable } =
-    await import("@web/lib/prefs.js")
-  const { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor } =
-    await import("@web/lib/workspace.js")
-  const Menu = await import("@web/theme/default/components/menu.html")
-  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
-  const { brands, loadBrands, saveBrands, importBrandFiles, brandSrc, builtinCount } =
-    await import("@web/lib/brands.js")
-  const BrandIcon = await import("@web/components/brand-icon.html")
+  const [
+    { prefs, setTheme, setEditor, setEditorTone, setSnippetTone, setLayout, setSize, monacoAvailable },
+    { loadIconTheme, saveIconTheme, importThemeFiles, themeFromFiles, themeFromDrop, loadIconPreviews, glyphFor },
+    Menu,
+    ChoiceSegmented,
+    { brands, loadBrands, saveBrands, importBrandFiles, brandSrc, builtinCount },
+    BrandIcon,
+  ] = await C79.importAll([
+    "@web/lib/prefs.js",
+    "@web/lib/workspace.js",
+    "@web/theme/default/components/menu.html",
+    "@web/theme/default/components/choice-segmented.html",
+    "@web/lib/brands.js",
+    "@web/components/brand-icon.html",
+  ])
 
   // The brand marks the pickers draw: the page's own few, or a pack named as
   // `[ui] brand-icons` — imported into luu's folder, or installed with npm

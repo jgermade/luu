@@ -18,15 +18,27 @@
   // one being edited (`""` to add), and `saved(name)` is told what was
   // written. A default is never made here: a click on a model makes it, and
   // the host of a remote one is typed over the list, where it is held.
-  const { state, saveProviders, probeProvider, providerModels } = await import("@web/lib/store.js")
-  const { modelLabel } = await import("@web/lib/engines.js")
-  const OriginBadge = await import("@web/components/origin-badge.html")
-  const SubModal = await import("@web/theme/default/components/sub-modal.html")
-  const Button = await import("@web/theme/default/components/button.html")
-  const TextInput = await import("@web/theme/default/components/text-input.html")
-  const Select = await import("@web/theme/default/components/select.html")
-  const Checkbox = await import("@web/theme/default/components/checkbox.html")
-  const ChoiceSegmented = await import("@web/theme/default/components/choice-segmented.html")
+  const [
+    { state, saveProviders, probeProvider, providerModels },
+    { modelLabel },
+    OriginBadge,
+    SubModal,
+    Button,
+    TextInput,
+    Select,
+    Checkbox,
+    ChoiceSegmented,
+  ] = await C79.importAll([
+    "@web/lib/store.js",
+    "@web/lib/engines.js",
+    "@web/components/origin-badge.html",
+    "@web/theme/default/components/sub-modal.html",
+    "@web/theme/default/components/button.html",
+    "@web/theme/default/components/text-input.html",
+    "@web/theme/default/components/select.html",
+    "@web/theme/default/components/checkbox.html",
+    "@web/theme/default/components/choice-segmented.html",
+  ])
 
   // False once it should leave: `SubModal` plays the exit, then `close`
   // unmounts it — after the exit, which the sheet does not announce.

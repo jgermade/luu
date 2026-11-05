@@ -4,13 +4,19 @@
   // names it and changes it, so it is not said again here. How the page looks
   // moved to Appearance on 2026-10-21. See
   // `RECORD/2026-10-21.the-design-system-applied.completed.md`.
-  const { workspace } = await import("@web/lib/workspace.js")
-  const { state, loadProviders, saveToolSteps } = await import("@web/lib/store.js")
+  // `account` is who is logged in, on a server with users: asked once, before
+  // the page mounted. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
+  const [
+    { workspace },
+    { state, loadProviders, saveToolSteps },
+    { account, logOut, listLogins, endLogin, endOtherLogins, passkeysHere, listPasskeys,
+      addPasskey, renamePasskey, removePasskey, deviceName },
+  ] = await C79.importAll([
+    "@web/lib/workspace.js",
+    "@web/lib/store.js",
+    "@web/lib/account.js",
+  ])
   if (!state.providers) loadProviders()
-  // Who is logged in, on a server with users: asked once, before the page
-  // mounted. See `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`.
-  const { account, logOut, listLogins, endLogin, endOtherLogins, passkeysHere, listPasskeys,
-    addPasskey, renamePasskey, removePasskey, deviceName } = await import("@web/lib/account.js")
 
   // This user's logins: when each began and ends, this browser's marked, and
   // the others ended one by one or all at once. See

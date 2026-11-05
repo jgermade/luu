@@ -1925,7 +1925,7 @@ Server stack: `axum` + `tokio`.
 ### UI stack
 
 **[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
-`web/vendor/jq79.js`, version 0.7.6, with its source map beside it, which binds attributes one
+`web/vendor/jq79.js`, version 0.7.9, with its source map beside it, which binds attributes one
 at a time (`:title="x"`); `:attrs` went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
 **0.7.4 keeps a keyed `:each` row that is handed a new object**, re-running its bindings rather
@@ -1940,6 +1940,11 @@ See [`RECORD/2026-10-21.jq79-0.7.5.completed.md`](RECORD/2026-10-21.jq79-0.7.5.c
 **0.7.6 downloads a component's source once** and builds every instance from that text, and its
 `$mounted()` waits for the nested components that have not painted yet. Neither changed what the
 suites see. See [`RECORD/2026-10-27.jq79-0.7.6.completed.md`](RECORD/2026-10-27.jq79-0.7.6.completed.md).
+**0.7.9 has `C79.importAll([...])`**, one `await` for several components and modules, and every
+setup script that imported more than one file asks for them that way: at once, rather than one
+round trip per `await`. Its relative specifiers resolve against the page, so every entry is an
+`@web/` one. Until `#app` holds an element, `index.html` shows the logo drawing itself. See
+[`RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md`](RECORD/2026-11-05.jq79-0.7.9-and-importall.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
