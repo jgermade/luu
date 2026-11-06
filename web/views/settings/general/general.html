@@ -133,7 +133,7 @@
       Your sessions and your folder are yours: nobody else on this server
       sees them, an admin or an owner included.
     </dd>
-    <dt>Logins</dt>
+    <dt class="top">Logins</dt>
     <dd>
       <ul class="logins" :if="logins?.length">
         <li :each="login in logins" :key="login.id">
@@ -149,7 +149,7 @@
       <button type="button" class="sign-out" @click="endOthers()">Sign out everywhere else</button>
     </dd>
     <dd :if="loginsError" class="warn">{{ loginsError }}</dd>
-    <dt :if="withPasskeys">Passkeys</dt>
+    <dt :if="withPasskeys" class="top">Passkeys</dt>
     <dd :if="withPasskeys">
       <ul class="logins" :if="passkeys?.length">
         <li :each="p in passkeys" :key="p.id">
@@ -230,7 +230,9 @@
      nothing. */
   .general-pane { flex: 1 0 auto; }
   .inline { display: flex; align-items: center; gap: .6rem; }
-  .steps { width: 5rem; }
+  /* Not the row's leftover width (`flex: 1`, every input's base in app.css):
+     a count of a few digits. */
+  .steps { flex: none; width: 5rem; }
   .sign-out {
     font: inherit;
     font-size: var(--luu-text-md);
@@ -242,7 +244,9 @@
     cursor: pointer;
   }
   .sign-out:hover { background: var(--luu-hover); }
-  .logins { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+  /* A label over a list sits at the list's first line, not its middle. */
+  .settings dt.top { align-items: flex-start; }
+  .logins { flex: 1; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
   .logins > li { display: flex; align-items: center; gap: .6rem; }
   .logins .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .logins .dim { color: var(--luu-fg-muted); font-size: 12px; }
