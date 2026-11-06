@@ -356,7 +356,13 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
   margin: .6rem 0 0;
   font-size: 13px;
 }
+/* **Each in its own column, said rather than left to auto-placement.** A
+   label may head more than one value — a fact, then its button, then its
+   error — and an unplaced second `dd` took the next free cell, which is the
+   *label* column of the next row; every `dt` after it then landed in the
+   value column. Pinned, a `dd` after a `dd` starts a row of its own. */
 .settings dt {
+  grid-column: 1;
   color: var(--luu-fg-muted);
   display: flex;
   align-items: center;
@@ -364,7 +370,7 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.settings dd { margin: 0; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.settings dd { grid-column: 2; margin: 0; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .settings dd > .warn, .settings dd > .error {
   flex-basis: 100%;
   font-size: 11px;
