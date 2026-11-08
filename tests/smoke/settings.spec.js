@@ -1378,6 +1378,91 @@ test("a new default and the chat's picker both move the session without a restar
 })
 
 /**
+ * The picker on a session **with turns** moves it, history and all: the same
+ * session, re-folded on the other provider, and back again. Until 2026-11-08
+ * a resume of the session already live attached to it and answered `200`
+ * without moving anything, so the button kept naming the first provider. See
+ * `RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md`.
+ */
+test("the chat's picker moves a session that has turns, and the history comes along", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  // Where the test before left the session, to leave it there again: the
+  // tests after this one start from an empty session on that provider.
+  const left = await (await fetch(`${BASE}/api/settings`)).json()
+
+  // A session on the mock, and one turn in it, over the protocol socket.
+  const made = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "here" }),
+  })
+  expect(made.status).toBe(201)
+  const { id } = await made.json()
+  await new Promise((done, failed) => {
+    const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws`)
+    const timer = setTimeout(() => { ws.close(); failed(new Error("the turn never ended")) }, 15_000)
+    ws.onopen = () => ws.send(JSON.stringify({ type: "prompt", text: "una pregunta antes de cambiar" }))
+    ws.onmessage = ({ data }) => {
+      const message = JSON.parse(data)
+      if (message.type === "plan_proposed") ws.send(JSON.stringify({ type: "decline_plan" }))
+      if (message.type === "ended" || message.type === "failed" || message.type === "refused") {
+        clearTimeout(timer)
+        ws.close()
+        done(message)
+      }
+    }
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await expect(page.locator(".options .dest")).toContainText("here")
+  await expect(page.getByText("una pregunta antes de cambiar", { exact: true })).toBeVisible()
+
+  await page.click(".options .dest")
+  const menu = page.locator(".options .menu")
+  await expect(menu.locator("footer")).toContainText("The history comes along")
+  await menu.locator(".prov", { hasText: "local" }).hover()
+  await menu.locator(".models button.model", { hasText: "tiny" }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(page.locator(".options .dest")).toContainText("local")
+  await expect(page.locator(".options .dest")).toContainText("tiny")
+  // The same session, its turn still on screen.
+  await expect(page.getByText("una pregunta antes de cambiar", { exact: true })).toBeVisible()
+  const moved = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(moved.profile).toBe("local")
+  // Listed as the one on screen, still one turn long: not a new session.
+  const listed = await (await fetch(`${BASE}/api/sessions`)).json()
+  const current = listed.filter(row => row.live?.current)
+  expect(current.map(row => [row.model.startsWith("tiny"), row.turns])).toEqual([[true, 1]])
+
+  // Back, by the API the dialog's *Continue here* uses; and a body naming
+  // where it already is attaches, as it always did.
+  const resume = body => fetch(`${BASE}/api/sessions/${id}/resume`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  expect((await resume({ provider: "here" })).status).toBe(200)
+  await expect(page.locator(".options .dest")).toContainText("here")
+  expect((await (await fetch(`${BASE}/api/settings`)).json()).profile).toBe("here")
+  expect((await resume({ provider: "here" })).status).toBe(200)
+  expect(errors).toEqual([])
+
+  const fresh = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: left.profile, model: left.model }),
+  })
+  expect(fresh.status).toBe(201)
+})
+
+/**
  * The models already on the machine, named by where they came from, in the
  * engine form and in the chat's picker for a provider whose engine luu
  * starts. The stores are the suite's own fixtures — see `beforeAll`.

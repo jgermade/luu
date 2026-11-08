@@ -2986,11 +2986,18 @@ once** ([`RECORD/2026-10-30.sessions-side-by-side.WIP.md`](RECORD/2026-10-30.ses
 agency (worker, container), grants, fold, stream and event channel — and which one was
 used most recently. `POST /api/sessions` makes one **beside** the others, built on
 `LiveSession::blank`, and makes it current; `POST /api/sessions/:id/resume` makes a stored
-one live the same way, or, when it is already live, attaches to it as it is. Neither ends
-anything: a turn in one runs while another is on screen. **Addressed by `?session=<id>`** on
-`/ws` and on any route (a middleware puts it in a task-local, `App::addressed`); without it,
-a route acts on the current one and a socket follows the current one, saying `hello` again
-when it changes. **`[sessions] max-live`** (4) bounds them: one more puts the least recently
+one live the same way, or, when it is already live, attaches to it as it is — **unless the
+body names another provider or model**: then it is moved, between turns (`409` while a turn
+runs or its gate waits), by the same resume run on its own checkpoint under the posture and
+agency it already has, rebuilt under its id with the history re-folded for the new destination
+and a header where it changed; an engine only the old destination used is released. That is
+the picker's switch and *Continue here*, which until 2026-11-08 attached and moved nothing
+([`RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md`](RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md)).
+Neither ends anything: a turn in one runs while another is on screen. **Addressed by
+`?session=<id>`** on `/ws` and on any route (a middleware puts it in a task-local,
+`App::addressed`); without it, a route acts on the current one and a socket follows the
+current one, saying `hello` again when it changes. A socket that names a session keeps to that
+id, so it follows a move too. **`[sessions] max-live`** (4) bounds them: one more puts the least recently
 used idle one to sleep — checkpointed, its worker ended, out of the map, resumed when opened —
 and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
 the current one, one with a client, a turn or a proposal never sleeps. `DELETE

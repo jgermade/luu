@@ -4168,12 +4168,18 @@ async fn run_protocol_socket(
 
     loop {
         tokio::select! {
-            Ok(()) = changed.changed(), if following => {
+            Ok(()) = changed.changed() => {
                 let (whose, _) = changed.borrow_and_update().clone();
                 if whose != owner {
                     continue;
                 }
-                let Some(now) = app.current_of(&owner) else {
+                let now = match following {
+                    true => app.current_of(&owner),
+                    // Named, it keeps to its session — which a move to another
+                    // destination rebuilds under the same id.
+                    false => rebuilt(&app, &live).await,
+                };
+                let Some(now) = now else {
                     continue;
                 };
                 if Arc::ptr_eq(&now, &live) {
@@ -4248,11 +4254,26 @@ async fn run_protocol_socket(
                     }
                     _ => {}
                 }
+                // A message that arrived before the notice of a move: it is
+                // for the session as it is now, not the one the move replaced.
+                if let Some(now) = rebuilt(&app, &live).await {
+                    live = now;
+                    _attached = Attached::new(live.clone());
+                    events = live.events.subscribe();
+                }
                 live.touch();
                 handle_client_message(&app, &live, message).await;
             }
         }
     }
+}
+
+/// The session `live` was rebuilt as, when a move to another destination
+/// replaced it under its own id (`resume_session`); `None` when it is still
+/// the one live, or no longer live at all.
+async fn rebuilt(app: &App, live: &Arc<LiveSession>) -> Option<Arc<LiveSession>> {
+    let id = live.session_id.lock().await.clone();
+    app.live(&id).filter(|now| !Arc::ptr_eq(now, live))
 }
 
 async fn handle_client_message(app: &Arc<App>, live: &Arc<LiveSession>, message: ClientMessage) {
@@ -13093,19 +13114,52 @@ async fn resume_session(
     };
     // Already live — beside the current one, or asleep in nobody's way — is
     // attached to rather than resumed: it becomes the current one, as it is,
-    // with whatever it is running. A body naming another destination does not
-    // move it; *Continue here* on it does. See
+    // with whatever it is running. See
     // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
-    if let Some(live) = app.live(id) {
-        app.make_current(id, live.clone());
-        let mut summary = live.view.lock().await.summary();
-        summary.id = id.to_string();
-        return Json(summary).into_response();
-    }
-    if let Err(refused) = room_for_one(app).await {
-        return *refused;
-    }
-    let previous = app.current();
+    //
+    // **Unless the body names somewhere else for it to send.** That is the
+    // model picker's switch and the sessions dialog's *Continue here*, and
+    // both are only ever asked of a session that is live: attaching answered
+    // them `200` and moved nothing, so a page that picked another provider
+    // kept sending to the first one. A move is the resume below run on the
+    // session's own checkpoint — the history re-folded with the new
+    // destination's counter and tool transport, and the header saying where
+    // it changed — under the posture it already has and the agency already
+    // running it, between turns, with its lock held until the rebuilt one is
+    // live under the same id. See
+    // `RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md`.
+    let moving = match app.live(id) {
+        Some(live) if names_another_destination(&asked, &live).await => Some(live),
+        Some(live) => {
+            app.make_current(id, live.clone());
+            let mut summary = live.view.lock().await.summary();
+            summary.id = id.to_string();
+            return Json(summary).into_response();
+        }
+        None => None,
+    };
+    let _between_turns = match &moving {
+        Some(live) => {
+            let session = live.session.lock().await;
+            if session.current.is_some() || session.pending.is_some() || session.held.is_some() {
+                return (
+                    StatusCode::CONFLICT,
+                    "a turn is running or a proposal waits at its gate: a session moves to \
+                     another destination between turns",
+                )
+                    .into_response();
+            }
+            Some(session)
+        }
+        // Moving one takes no room: it is rebuilt in its own place.
+        None => {
+            if let Err(refused) = room_for_one(app).await {
+                return *refused;
+            }
+            None
+        }
+    };
+    let previous = moving.clone().unwrap_or_else(|| app.current());
 
     let Some(store_mutex) = &app.store else {
         return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
@@ -13180,6 +13234,12 @@ async fn resume_session(
         // A user's root is their folder, and never `serve`'s.
         .or_else(|| folder_under_root(app, None).ok().flatten());
     let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
+        // A live session moving keeps what runs it: nothing is built, and
+        // nothing that runs its tools is ended.
+        _ if moving.is_some() => Some(Ok((
+            previous.posture.lock().await.clone(),
+            previous.agency().await,
+        ))),
         (None, None, Some(stored)) => {
             posture_from_copy(
                 app,
@@ -13476,8 +13536,34 @@ async fn resume_session(
     };
     app.publish(&live, Event::Protocol(hello)).await;
     app.make_current(id, live.clone());
+    // The one it replaced is out of the map now: an engine only it sent to
+    // is nobody's, and is stopped as a session put to sleep would stop it.
+    if moving.is_some() {
+        release_engines(app, None).await;
+    }
 
     Json(summary).into_response()
+}
+
+/// Whether a resume of the live session `live` asks it to send somewhere
+/// else: a profile or a model named, and not the one it sends to now. A body
+/// naming where it already is — the history's click, a second click on the
+/// picker's row — is an attach, as it was.
+async fn names_another_destination(asked: &NewSession, live: &LiveSession) -> bool {
+    let named = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let (provider, model) = (named(&asked.provider), named(&asked.model));
+    if provider.is_none() && model.is_none() {
+        return false;
+    }
+    let sending = live.destination().await;
+    provider.is_some_and(|provider| sending.settings.profile.as_deref() != Some(provider.as_str()))
+        || model.is_some_and(|model| model != sending.model)
 }
 
 /// What a page may change about a stored session short of deleting it: its
