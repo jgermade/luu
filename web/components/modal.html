@@ -1,4 +1,4 @@
-<script :setup="{ title = '', width = '', open = true, locked = false, variant = '', animation = '', height = '', head = 'auto', sheet = false }">
+<script :setup="{ title = '', width = '', open = true, locked = false, variant = '', animation = '', height = '', head = 'auto', sheet = 'auto' }">
   // A modal, as the element the platform already has: a `<dialog>` opened
   // with `showModal()` brings ESC, a focus trap, everything behind it made
   // inert, and a `::backdrop`. What it does *not* bring is the page's own
@@ -56,8 +56,12 @@
   const SHEET_CLOSE_MS = 220
   let leaving = false
 
-  // **A sheet**, when the owner asks for one (`:sheet`, a phone): the whole
-  // width, up from the bottom edge, with a grip on its head. The head drags
+  // **A sheet on a phone**, every top-level one: the whole width, up from the
+  // bottom edge, with a grip on its head. `sheet` is `auto` for that, and
+  // `true` or `false` to say it outright. A phone is the page's rule
+  // (`lib/phone.js`), written here again as a media query, since nothing in
+  // `components/` imports from outside it. A sheet is as tall as what it
+  // holds, and a folio (Settings) as tall as the window allows. The head drags
   // it down, and a drag past a quarter of its height, or a quick flick, closes
   // it; anything less springs back. Only the head drags, so the body keeps its
   // own scroll. A child is never a sheet: it comes out of its parent's head
@@ -66,7 +70,13 @@
   // `dragY` is how far down it has been pulled, in pixels. While a finger
   // holds it the sheet follows with no transition, and on release it either
   // springs back or leaves from where it is (`--drag` in `sheet-down`).
-  $: isSheet = sheet && !parent
+  const PHONE = window.matchMedia("(max-width: 760px), (pointer: coarse) and (max-height: 760px)")
+  let phone = PHONE.matches
+  const phoneChanged = () => { phone = PHONE.matches }
+  PHONE.addEventListener("change", phoneChanged)
+  $destroyed(() => PHONE.removeEventListener("change", phoneChanged))
+  $: wantsSheet = sheet === "auto" ? phone : sheet === "" || sheet === true || sheet === "true"
+  $: isSheet = wantsSheet && !parent
   let dragY = 0
   let dragging = false
   let grip = null
@@ -75,7 +85,9 @@
     if (event.button > 0 || event.target.closest("button, a, input, select, textarea")) return
     grip = { y: event.clientY, at: performance.now(), lastY: event.clientY, lastAt: performance.now(), v: 0 }
     dragging = true
-    event.currentTarget.setPointerCapture?.(event.pointerId)
+    // A pointer the browser no longer knows cannot be captured; the drag
+    // still works while it stays on the head.
+    try { event.currentTarget.setPointerCapture?.(event.pointerId) } catch {}
   }
   const pull = event => {
     if (!grip) return
@@ -357,14 +369,18 @@
   dialog.modal.sheet {
     width: 100%;
     max-width: 100%;
-    margin: auto 0 0;
-    height: calc(100dvh - 2.5rem);
+    /* Held by its bottom edge only: a modal dialog's top and bottom are both
+       0, and with both set an auto height fills the window. */
+    inset: auto 0 0;
+    margin: 0;
+    height: auto;
     max-height: calc(100dvh - 2.5rem);
     border-width: 1px 0 0;
     border-radius: 14px 14px 0 0;
     transform: translateY(var(--drag, 0px));
     transition: transform .28s cubic-bezier(.16, 1, .3, 1);
   }
+  dialog.modal.sheet.folio { height: calc(100dvh - 2.5rem); }
   dialog.modal.sheet.dragging { transition: none; }
   dialog.modal.sheet[open] { animation: sheet-up .32s cubic-bezier(.16, 1, .3, 1); }
   dialog.modal.sheet.closing { animation: sheet-down .22s cubic-bezier(.4, 0, 1, 1) forwards; }

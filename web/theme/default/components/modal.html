@@ -37,7 +37,25 @@
   //
   //   <Modal :open="removing" title="Remove workstation?" head="bad" …>
 
-  const Scrollable = await import("./scrollable.html")
+  const [Scrollable, { isPhone, watchPhone, grip }] = await Promise.all([
+    import("./scrollable.html"),
+    import("./sheet.js"),
+  ])
+
+  // **On a phone it is a sheet**: the whole width, up from the bottom, and
+  // its head pulled down asks to close, as ESC does. A pull that does not
+  // reach (or a modal that is not dismissible) springs back. See `sheet.js`.
+  let sheet = isPhone()
+  let dragY = 0
+  let dragging = false
+  const pull = grip({
+    enabled: () => sheet && !leaving,
+    move: (dy, held) => { dragY = dy; dragging = held },
+    release: close => {
+      if (close && isDismissible) return ask()
+      dragY = 0
+    },
+  })
 
   // A bare attribute (`<X disabled>`) arrives as "", and means on.
   const flag = v => v === "" || v === true || v === "true"
@@ -63,8 +81,10 @@
     const dialog = $self("dialog")
     if (!dialog || dialog.open) return
     leaving = false
+    dragY = 0
+    sheet = isPhone()
     dialog.showModal()
-    wide = dialog.offsetWidth >= LARGE
+    wide = !sheet && dialog.offsetWidth >= LARGE
   }
   const hide = () => {
     const dialog = $self("dialog")
@@ -90,7 +110,12 @@
     if (event.target === event.currentTarget) ask()
   }
 
+  $: box = sheet
+    ? `--drag:${dragY}px` + (height ? ";height:calc(100dvh - 2.5rem)" : "")
+    : `width:min(${width}, calc(100vw - 2rem))` + (height ? `;height:min(${height}, calc(100dvh - 2rem))` : "")
+
   await $mounted()
+  $destroyed(watchPhone(now => { sheet = now }))
   $: isOpen ? requestAnimationFrame(show) : hide()
 </script>
 
@@ -98,7 +123,9 @@
         :class.leaving="leaving"
         :class.tall="!!height"
         :class.top="align === 'top'"
-        :style="`width:min(${width}, calc(100vw - 2rem))` + (height ? `;height:min(${height}, calc(100dvh - 2rem))` : '')"
+        :class.sheet="sheet"
+        :class.dragging="dragging"
+        :style="box"
         :aria-label="title || null"
         @cancel="cancel($event)"
         @click="backdrop($event)">
@@ -109,7 +136,10 @@
             :class.tone-ok="tone === 'ok'"
             :class.tone-warn="tone === 'warn'"
             :class.tone-bad="tone === 'bad'"
-            :data-tone="dark ? 'dark' : null">
+            :data-tone="dark ? 'dark' : null"
+            @pointerdown="pull.down($event)" @pointermove="pull.move($event)"
+            @pointerup="pull.up($event)" @pointercancel="pull.up($event)">
+      <span :if="sheet" class="grip" aria-hidden="true"></span>
       <h2 class="title">{{ title }}</h2>
       <button :if="isDismissible" type="button" class="close" title="Close" @click="ask()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -279,5 +309,48 @@
     padding: var(--luu-space-3) var(--luu-space-5);
     border-top: var(--luu-border-width) solid var(--luu-border);
     background: var(--luu-sunken);
+  }
+
+  /* ---- a sheet, on a phone: the whole width, up from the bottom (`sheet.js`) */
+  .modal.sheet {
+    width: 100%;
+    max-width: 100%;
+    /* Held by its bottom edge only: a modal dialog's top and bottom are both
+       0, and with both set an auto height fills the window. */
+    inset: auto 0 0;
+    margin: 0;
+    max-height: calc(100dvh - 2.5rem);
+    border-radius: 14px 14px 0 0;
+    transform: translateY(var(--drag, 0px));
+    transition: transform .28s cubic-bezier(.16, 1, .3, 1);
+  }
+  .modal.sheet.dragging { transition: none; }
+  .modal.sheet[open] { animation: sheet-up var(--luu-duration-slow) var(--luu-ease-out); }
+  .modal.sheet.leaving { animation: sheet-down var(--luu-duration) cubic-bezier(.4, 0, 1, 1) forwards; }
+  .modal.sheet .box > :first-child { border-top-left-radius: 14px; border-top-right-radius: 14px; }
+  .modal.sheet .box > :last-child {
+    border-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-bottom: max(var(--luu-space-4), env(safe-area-inset-bottom, 0px));
+  }
+  /* The head is what drags, so a finger on it is not a scroll. */
+  .modal.sheet .head { touch-action: none; padding-top: var(--luu-space-5); cursor: grab; }
+  .modal.sheet.dragging .head { cursor: grabbing; }
+  .grip {
+    position: absolute;
+    top: .4rem;
+    left: 50%;
+    width: 2.5rem;
+    height: 4px;
+    margin-left: -1.25rem;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: .35;
+  }
+  @keyframes sheet-up { from { transform: translateY(100%); } }
+  @keyframes sheet-down {
+    from { transform: translateY(var(--drag, 0px)); }
+    to { transform: translateY(100%); }
   }
 </style>

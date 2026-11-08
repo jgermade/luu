@@ -1704,12 +1704,13 @@ test.describe("Settings on a phone", () => {
     await page.click('.inspector .col-foot button[title="Settings"]')
     const sheet = page.locator("dialog.modal.sheet")
     await expect(sheet).toBeVisible()
-    // The opening slide takes .32s.
-    await page.waitForTimeout(500)
+    // Waited for rather than slept on: the slide up ends on the bottom edge,
+    // however long a loaded machine takes to draw it.
+    const bottom = async () => { const b = await sheet.boundingBox(); return Math.round(b.y + b.height) }
+    await expect.poll(bottom, { timeout: 10_000 }).toBe(844)
     const box = await sheet.boundingBox()
     expect(Math.round(box.x)).toBe(0)
     expect(Math.round(box.width)).toBe(390)
-    expect(Math.round(box.y + box.height)).toBe(844)
 
     // The sections are a row under the content, and choosing one draws it.
     const rail = sheet.locator(".rail.horizontal")
@@ -1732,11 +1733,66 @@ test.describe("Settings on a phone", () => {
       await page.mouse.up()
     }
     await pull(60)
-    await page.waitForTimeout(400)
     await expect(sheet).toBeVisible()
-    expect(Math.round((await sheet.boundingBox()).y)).toBe(Math.round(box.y))
+    await expect.poll(bottom, { timeout: 10_000 }).toBe(844)
     await pull(400)
     await expect(page.locator("dialog.modal")).toHaveCount(0)
+  })
+})
+
+/**
+ * Every dialog on a phone is a sheet, not only Settings: the project picker
+ * (the page's own Modal), the sessions dialog (the theme's TabModal) and a
+ * turn's context. Each is the whole width and sits on the bottom edge, and a
+ * pull on its head closes the ones that may be closed.
+ */
+test.describe("dialogs on a phone", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+  test("are all sheets, pulled down to close", async ({ page }) => {
+    const onTheBottomEdge = async dialog => {
+      await expect.poll(async () => {
+        const b = await dialog.boundingBox()
+        return b && [Math.round(b.x), Math.round(b.width), Math.round(b.y + b.height)]
+      }, { timeout: 10_000 }).toEqual([0, 390, 844])
+    }
+    const pullDown = async dialog => {
+      const head = await dialog.locator("header").first().boundingBox()
+      const x = head.x + head.width / 2
+      await page.mouse.move(x, head.y + 6)
+      await page.mouse.down()
+      for (let step = 1; step <= 8; step++) await page.mouse.move(x, head.y + 6 + step * 50)
+      await page.mouse.up()
+    }
+
+    await page.goto(`${BASE}/index.html`)
+    // The first visit's folder picker: the page's own Modal, and locked.
+    const picker = page.locator("dialog.modal.sheet").first()
+    await expect(picker).toBeVisible()
+    await onTheBottomEdge(picker)
+    await chooseFolder(page)
+
+    // The sessions dialog: the theme's TabModal.
+    await page.click('button[title="Earlier sessions"]')
+    const sessions = page.locator("dialog.modal.sheet").first()
+    await expect(sessions).toBeVisible()
+    await onTheBottomEdge(sessions)
+    await pullDown(sessions)
+    await expect(page.locator("dialog.modal[open]")).toHaveCount(0)
+
+    // A turn's context: the page's Modal again. One prompt first, so there is
+    // a turn to show.
+    const composer = page.locator(".composer input")
+    await expect(composer).toBeEnabled()
+    await composer.fill("hola")
+    await page.click('.composer button[type="submit"]')
+    const ctx = page.locator("footer.chat-foot button.ctx")
+    await expect(ctx).toBeEnabled({ timeout: 30_000 })
+    await ctx.click()
+    const context = page.locator("dialog.modal.sheet").first()
+    await expect(context).toBeVisible()
+    await onTheBottomEdge(context)
+    await pullDown(context)
+    await expect(page.locator("dialog.modal[open]")).toHaveCount(0)
   })
 })
 
