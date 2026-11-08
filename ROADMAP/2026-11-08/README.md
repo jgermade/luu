@@ -151,10 +151,11 @@ leftover, and it says which row it comes from.
 | 73 | **Sessions side by side, step 5**: before a session starts on a second local model, say what it will hold in memory. The record stays `WIP` until this is built | nothing | [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md) §4 |
 | 74 | **Proved on stand-ins, owed on the real thing**: a real authenticator's discoverable login (from 59; Chromium's virtual one would not answer it); the isolation run on the next release's own image layers (from 70); an admin's page clicked through (from 58) | an authenticator; a release | [`passkeys`](../../RECORD/2026-11-05.passkeys.completed.md), [`the-isolation-run-in-the-image`](../../RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md), [`roles-in-the-page`](../../RECORD/2026-11-05.roles-in-the-page.completed.md) |
 
-**Asked and not answered**, which is not a row: on 2026-11-04, the person was
-asked what they saw of the phone's three slides, on which phone, and whether
-held sideways ([`where-the-public-luu-stands`](../../RECORD/2026-11-04.where-the-public-luu-stands.completed.md)).
-Ask again before changing anything there.
+~~**Asked and not answered**: what the person saw of the phone's three slides,
+and whether held sideways~~. *Answered 2026-11-08*: always vertical. A phone
+held sideways now keeps the slides; the orientation itself cannot be locked by
+a page — [`a-phone-held-sideways`](../../RECORD/2026-11-08.a-phone-held-sideways.completed.md).
+What is left is a real device, the same as before.
 
 ```mermaid
 gantt
