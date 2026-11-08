@@ -19,6 +19,7 @@
     Rail,
     { account, managesPeople },
     { later },
+    { onPhone },
   ] = await C79.importAll([
     "@web/lib/store.js",
     "@web/lib/ui.js",
@@ -27,7 +28,18 @@
     "@web/components/rail.html",
     "@web/lib/account.js",
     "@web/lib/later.js",
+    "@web/lib/phone.js",
   ])
+
+  // **On a phone, Settings is a sheet**: the whole width, up from the bottom,
+  // pulled down by its head to close, and the sections a row at its foot that
+  // scrolls sideways. A column of sections beside the content left the
+  // content a third of a phone, a word a line. Decided by the rule the page's
+  // slides use, so a phone held sideways is still one. See
+  // `RECORD/2026-11-08.settings-as-a-sheet-on-a-phone.completed.md`.
+  let phone = false
+  const stopWatching = onPhone(now => { phone = now })
+  $destroyed(stopWatching)
 
   // **A section is asked for when it is mounted**, not with the dialog: one
   // is drawn at a time, and with jq79 0.7.11 a top-level import brings its
@@ -144,9 +156,9 @@
   })
 </script>
 
-<Modal title="Settings" width="76rem" variant="folio" animation="folio" @close="closeSettings()">
+<Modal title="Settings" width="76rem" variant="folio" animation="folio" :sheet="phone" @close="closeSettings()">
 
-  <div class="sections">
+  <div class="sections" :class.phone="phone">
     <!-- The rail. The third section is the one the shape was said to make
          free, and it was: a name and a component, no place in a scroll. It is
          here rather than in General because General is facts about the
@@ -155,7 +167,7 @@
          preference that changes the prompt is not a preference. See
          `RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md`. -->
     <div class="rail-col">
-      <Rail :items="SECTIONS" :model="ui.section" :slot="{ item }">
+      <Rail :items="SECTIONS" :model="ui.section" :horizontal="phone" :slot="{ item }">
         <svg class="ic"><use :href="'#' + item.icon"/></svg>
         <span>{{ item.label }}</span>
       </Rail>
@@ -261,6 +273,21 @@
     flex: 1 0 auto;
     display: flex;
     flex-direction: column;
+  }
+  /* ---- a phone: the content the whole width, the sections a row below it */
+  .sections.phone {
+    display: flex;
+    flex-direction: column;
+  }
+  .sections.phone .pane { flex: 1 1 auto; height: auto; }
+  .sections.phone .rail-col {
+    order: 2;
+    flex: 0 0 auto;
+    height: auto;
+    padding: .25rem 0 calc(.25rem + env(safe-area-inset-bottom, 0px));
+    border-right: 0;
+    border-top: 1px solid var(--luu-border);
+    overflow: visible;
   }
   @media (prefers-reduced-motion: reduce) {
     .pane, .section, .section.on, .section.leaving { transition: none; }

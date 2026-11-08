@@ -1691,6 +1691,55 @@ test.describe("a phone held sideways", () => {
   })
 })
 
+/**
+ * Settings on a phone is a sheet: the whole width, up from the bottom, the
+ * sections a row at its foot, and its head pulled down to close it. A short
+ * pull springs back.
+ */
+test.describe("Settings on a phone", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+  test("is a sheet from the bottom, with the sections in a row below", async ({ page }) => {
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    const sheet = page.locator("dialog.modal.sheet")
+    await expect(sheet).toBeVisible()
+    // The opening slide takes .32s.
+    await page.waitForTimeout(500)
+    const box = await sheet.boundingBox()
+    expect(Math.round(box.x)).toBe(0)
+    expect(Math.round(box.width)).toBe(390)
+    expect(Math.round(box.y + box.height)).toBe(844)
+
+    // The sections are a row under the content, and choosing one draws it.
+    const rail = sheet.locator(".rail.horizontal")
+    await expect(rail).toBeVisible()
+    const pane = await sheet.locator(".pane").boundingBox()
+    expect((await rail.boundingBox()).y).toBeGreaterThanOrEqual(pane.y + pane.height - 1)
+    await rail.locator('button:has-text("Models")').click()
+    await expect(sheet.locator('.section.on[data-section="models"]')).toBeVisible()
+    const section = await sheet.locator('.section.on[data-section="models"]').boundingBox()
+    expect(section.width).toBeGreaterThan(380)
+
+    // A short pull on the head springs back; a long one closes it.
+    const head = await sheet.locator(".modal-head").boundingBox()
+    const pull = async dy => {
+      await page.mouse.move(head.x + head.width / 2, head.y + 12)
+      await page.mouse.down()
+      for (let step = 1; step <= 8; step++) {
+        await page.mouse.move(head.x + head.width / 2, head.y + 12 + (dy * step) / 8)
+      }
+      await page.mouse.up()
+    }
+    await pull(60)
+    await page.waitForTimeout(400)
+    await expect(sheet).toBeVisible()
+    expect(Math.round((await sheet.boundingBox()).y)).toBe(Math.round(box.y))
+    await pull(400)
+    await expect(page.locator("dialog.modal")).toHaveCount(0)
+  })
+})
+
 test("a short desktop window is not a phone", async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 390 })
   await page.goto(`${BASE}/index.html`)

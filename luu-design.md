@@ -1453,6 +1453,13 @@ via `<PathText>` with the full host directory in hover title, and settings forms
 `--dt-width: 9rem` label column.
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps.
+**On a phone it is a sheet** (`<Modal :sheet>`, by `lib/phone.js`'s rule, held sideways included):
+the whole width, up from the bottom, closed by pulling its head down (past a quarter of its height,
+or a flick; less springs back), with the sections a row at its foot that scrolls sideways
+(`<Rail horizontal>`). There, every `dl.settings` puts its label over its value, and *Models* puts
+the providers above their models (a container query on its box, so the same component keeps its
+two columns wherever it is wide). See
+[`RECORD/2026-11-08.settings-as-a-sheet-on-a-phone.completed.md`](RECORD/2026-11-08.settings-as-a-sheet-on-a-phone.completed.md).
 Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
 and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (the folder `serve` was started in, and luu's own — the folder chosen under the first is the inspector foot's, which names it and changes it), *Models*
 (the providers file the next run reads, laid out as the new session's dialog: the providers the
