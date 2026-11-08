@@ -1,0 +1,80 @@
+# Eleven turns over a small project, where what answers each question is a
+# different kind of tool output: a README, a failing test run, a module and its
+# test, a grep through a long log, the script that wrote it, the whole log, a table, a count, an edit and the test run
+# after it — and one question whose only answer is a command's output from
+# eight turns back.
+#
+# It exists for roadmap row 38 (ROADMAP/2026-11-08), which three open threads
+# ask for at once. `long-session.txt`, the one corpus that filled 8K before
+# this, has the model read one 2 000-line file on repeat, so:
+#
+#   (a) item 2's answer — 8K loses to 96K, 1 of 6 against 4 of 6 — rests on
+#       one corpus;
+#   (b) item 5's real case was never put to a model: no corpus made an answer
+#       depend on what a *command* returned, so `cited` and `cited_reads` could
+#       only tie (every command in that run was an empty grep);
+#   (c) no corpus mixes tool output that varies in size and kind.
+#
+# See RECORD/2026-11-08.a-corpus-that-overflows-with-mixed-output.completed.md.
+#
+# **It runs against a copy of `mixed-session/`, never in place**: turn 8 edits
+# a file, and Python leaves `__pycache__` beside what it runs. A run is
+#
+#   cp -r scripts/tasks/mixed-session "$SCRATCH"
+#   cd "$SCRATCH" && luu chat --script <this file> --allow-write . \
+#     --allow-command python3 --allow-command grep \
+#     --context-limit 8192 --temperature 0 --seed 1 --record run.jsonl
+#
+# against a server started with one slot (`-np 1`), and needs `python3` on the
+# machine (3.8 or later, standard library only). The arms are that line at
+# 8192 and at 98304, then 8192 with `--max-tool-steps 16` (row 36), then 8192
+# with `--prune-behind` and `[resend] results` set to `cited_reads` and to
+# `cited` (row 38(b)).
+#
+# **Turn 10 is row 38(b).** Its answer is in turn 2's test run, and in no
+# answer the model was asked to give: turn 2 asked for the test's name and the
+# two numbers, and turn 10 asks for its class and its line, which only the
+# traceback carries. Turn 9's run is newer and says only `OK`, and the test file
+# that would also say is a read the turn forbids. So a window that kept turn
+# 2's command output answers it, and one that evicted or cited it has to say it
+# does not know — the difference `cited_reads` (commands kept) and `cited`
+# (commands cited too) exist to make. Asking for the numbers again would not
+# do: pruning cites a tool's output and keeps the exchange, so the numbers
+# survive in the model's own turn-2 answer under every arm that prunes.
+#
+# **Every turn is answerable in three tool calls or fewer**, so a turn that ends
+# at the 8-step limit is a model exploring and not a question that needs eight.
+# Turn 6 is the one that needs the whole log: counting invoices by region is
+# a read of it, or one `grep -c` per region, since `run_command` takes an argv
+# and not a pipeline. **Two outputs here hit the 8 KiB cut every tool result
+# gets** (`MAX_OUTPUT_BYTES`): `orderbook/invoice.py` is 17 KB, and a whole read
+# of it ends at line ~250 with the cut said, past `invoice_total`, so turn 3
+# still answers in one read; the log is 15 KB, so reading all of it is two
+# ranged reads, and the end of the run is only in the second.
+# `crates/luu/tests/mixed_session_probe.rs` runs this file with the fewest calls
+# that answer it, scripted, and that session overflows 8192 on its own — the
+# overflow is the corpus's, not a wandering model's.
+#
+# The answers are in `mixed-session.key`, one line per question.
+
+what is this project, and how are its tests run?
+
+run the tests. which test fails, and what two numbers does its assertion compare?
+
+find the code that computes an invoice's total and tell me why that test fails. don't change anything yet.
+
+logs/nightly.log says last night's run failed. on which order, and with what error?
+
+why did the run stop at that order instead of skipping it and carrying on with the rest?
+
+before it stopped, how many orders did that run invoice, and which region got the most invoices?
+
+which region does that order ship to, and does the rates table have a rate for it?
+
+how many orders in data/orders.csv ship to that same region?
+
+fix the invoice total so the failing test passes, run the tests again, and tell me how many ran and whether they all passed.
+
+without running or reading anything: in that first test run, which test class was the failing test in, and on which line of the test file did its assertion fail?
+
+summarise this session in three lines: what failed, why, and what is still broken.
