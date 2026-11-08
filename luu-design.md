@@ -1147,7 +1147,10 @@ access = "execute"
   machine only) and offered first; an image a posture or an environment names is still
   offered after them until postures go
   ([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
-  §2). The shell,
+  §2), and last the one `serve` was started on (`--worker-image`, or its own `[worker]
+  image`) — which the flag moves every offered place onto, and which the chart's
+  `--worker kubernetes` makes the only one
+  ([`RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`](RECORD/2026-11-08.the-image-serve-was-started-on.completed.md)). The shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
   rest), what the last session used offered first — the runtime with what choosing it means
   beside it, as tall as the field's box: this machine as the person, its terminal the whole

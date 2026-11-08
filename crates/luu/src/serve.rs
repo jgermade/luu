@@ -11631,10 +11631,18 @@ async fn place_for(
 /// go (`RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4).
 /// A posture's file that does not load names nothing here; choosing it says
 /// why.
+///
+/// **And the one `serve` was started on**: `--worker-image`, or its own
+/// policy file's `[worker] image`. Whoever started the server named it, as
+/// surely as a table would — and the flag moves every place this server
+/// offers onto it, so leaving it out refused the offer the page had just been
+/// made. The Helm chart starts `serve` exactly so, and a cluster has no
+/// other image. See `RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`.
 async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRule>)> {
     let postures = app.postures();
     let environments = app.environments();
     let declared = declared_images().await;
+    let own = app.describe_for.clone();
     blocking(move || {
         let from_files = postures.values().filter_map(|posture| {
             agent_core::worker::WorkerConfig::from_file(&posture.policy).ok()
@@ -11652,6 +11660,24 @@ async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRu
             };
             if !named.iter().any(|(there, _)| *there == image) {
                 named.push((image, worker.paths));
+            }
+        }
+        if let Some(describe) = own {
+            let started = describe(None, None);
+            let contained = started
+                .runtime
+                .parse::<agent_core::worker::Runtime>()
+                .is_ok_and(|runtime| runtime.is_contained());
+            if let Some(image) = started.image.filter(|_| contained)
+                && !named.iter().any(|(there, _)| *there == image)
+            {
+                // Its in-image paths are its own file's, where it has one.
+                let paths = agent_core::worker::WorkerConfig::from_file(std::path::Path::new(
+                    &started.policy,
+                ))
+                .map(|worker| worker.paths)
+                .unwrap_or_default();
+                named.push((image, paths));
             }
         }
         named
@@ -14168,6 +14194,53 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The image `serve` was started on — `--worker-image`, as the chart
+    /// starts it — is one this machine names: the flag moves every place the
+    /// page is offered onto it, so a session asked there is made, and an
+    /// image nobody named is still refused. A server whose own worker runs on
+    /// the host names none by it.
+    #[tokio::test]
+    async fn the_image_serve_was_started_on_is_one_this_machine_names() {
+        const STARTED: &str = "ghcr.io/jgermade/luu-worker:0.1.13";
+        let describing = |runtime: &'static str, image: Option<&'static str>| -> DescribeFactory {
+            Arc::new(move |_, _| Where {
+                policy: "no-such-policy.toml".into(),
+                runtime: runtime.into(),
+                image: image.map(str::to_string),
+                missing: None,
+                gap: None,
+            })
+        };
+
+        let mut started = app(&["ok"]);
+        Arc::get_mut(&mut started).unwrap().describe_for =
+            Some(describing("docker", Some(STARTED)));
+        assert!(
+            images_named(&started)
+                .await
+                .iter()
+                .any(|(image, _)| image == STARTED)
+        );
+        let place = place_for(&started, Some("docker"), Some(STARTED))
+            .await
+            .unwrap();
+        assert_eq!(place.image.as_deref(), Some(STARTED));
+        assert!(
+            place_for(&started, Some("docker"), Some("nobody-named/this:1"))
+                .await
+                .is_err()
+        );
+
+        let mut on_host = app(&["ok"]);
+        Arc::get_mut(&mut on_host).unwrap().describe_for = Some(describing("host", Some(STARTED)));
+        assert!(
+            !images_named(&on_host)
+                .await
+                .iter()
+                .any(|(image, _)| image == STARTED)
+        );
     }
 
     /// The case that wrote nothing, which is the one that mattered.
