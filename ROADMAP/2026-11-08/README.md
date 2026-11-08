@@ -120,6 +120,7 @@ section (above).
 | --- | --- | --- | --- |
 | 13 | **A judge that is not the model under test.** Row 38's key splits literals from conclusions, so a judge would only score the second half | a design argument | [`machines.md`](machines.md) P1 |
 | 16 | **Rotating and revoking an approval key**, and nothing signs a *recording*. Also: **whether a passkey login signs approvals**, carried by [`passkeys`](../../RECORD/2026-11-05.passkeys.completed.md) | a fleet bigger than one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
+| 75 | **Strata, measured as a provider before it is an engine**: `backend = "openai"` at `127.0.0.1:8080/v1`, row 38's corpus on machine 4 — usage, native calls, where its reasoning arrives, its window. `kind = "strata"` only if that pays: it detaches, has a fixed port, its own model library and no single release asset | a run on machine 4 | [`strata-as-an-engine`](../../RECORD/2026-11-08.strata-as-an-engine.WIP.md) |
 
 **Section E — what a session may do: policies and grants.** The section heads
 in *italics* are in
@@ -180,7 +181,7 @@ gantt
     A second local model, warned           :mem, after links, 1d
 ```
 
-Not on the chart: rows 1, 3, 4 and 35 (a hand on a box), 71 and 74 (an account
+Not on the chart: rows 1, 3, 4, 35 and 75 (a hand on a box), 71 and 74 (an account
 and an authenticator), 62–63 (a cluster), 28 (ordered, deliberately
 unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c).
 
