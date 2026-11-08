@@ -2192,7 +2192,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/live", axum::routing::delete(end_live))
-        .route("/api/folders", get(get_folders))
+        .route("/api/folders", get(get_folders).post(post_folders))
         .route(
             "/api/session/folder",
             axum::routing::put(put_session_folder),
@@ -6250,7 +6250,7 @@ async fn post_workspace_rename(
     headers: axum::http::HeaderMap,
     Json(request): Json<RenameRequest>,
 ) -> Response {
-    if let Err(refused) = workspace_writable(&state, &headers) {
+    if let Err(refused) = workspace_writable(&state, &headers, "renaming") {
         return *refused;
     }
     let sandbox = workspace_sandbox(&state).await;
@@ -6262,10 +6262,12 @@ async fn post_workspace_rename(
 
 /// Whether this request may change the workspace: a server bound on loopback,
 /// asked by the name it was dialled by. [`engines_allowed`]'s two halves, with
-/// the refusals said about files.
+/// the refusals said about files. `doing` is what the request does, as a
+/// gerund — `renaming`, `making a folder` — so the refusal names it.
 fn workspace_writable(
     state: &AppRouterState,
     headers: &axum::http::HeaderMap,
+    doing: &str,
 ) -> Result<(), Box<Response>> {
     let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
     // A user's own session's folder: the sandbox below is theirs.
@@ -6273,11 +6275,10 @@ fn workspace_writable(
         return Ok(());
     }
     if !state.providers_editable {
-        return Err(refuse(
-            "this server is bound off loopback, and renaming changes this machine's files. \
-             Rename from a browser on the machine itself."
-                .to_string(),
-        ));
+        return Err(refuse(format!(
+            "this server is bound off loopback, and {doing} changes this machine's files. \
+             Do it from a browser on the machine itself."
+        )));
     }
     let host = headers
         .get(header::HOST)
@@ -6286,7 +6287,8 @@ fn workspace_writable(
     match host_is_loopback(host) {
         true => Ok(()),
         false => Err(refuse(format!(
-            "Host `{host}` is not this machine, and only this machine renames its files"
+            "Host `{host}` is not this machine, and only this machine changes its files \
+             ({doing} was asked)"
         ))),
     }
 }
@@ -12385,6 +12387,62 @@ async fn get_folders(
     };
     match workspace::tree(&sandbox, &query.path).await {
         Ok(tree) => Json(tree).into_response(),
+        Err(error) => workspace_error(error),
+    }
+}
+
+/// `POST /api/folders`: `{ "path": "<parent>", "name": "<new>" }`.
+#[derive(serde::Deserialize)]
+struct NewFolder {
+    /// The folder it goes in, relative to the root as `/api/folders` lists
+    /// it; `""` for the root itself.
+    #[serde(default)]
+    path: String,
+    name: String,
+}
+
+/// `POST /api/folders`: a new, empty folder for the picker to choose — the
+/// project somebody is about to start, which has nowhere to be chosen from
+/// until it exists. Under the same root [`get_folders`] browses and nowhere
+/// else: a user's folder for a user, `serve`'s root otherwise. One level, one
+/// name, never over something that is there — see [`workspace::make_dir`].
+///
+/// Who may is who may rename a file (`workspace_writable`): a person at this
+/// machine, or a user in their own folder. It is not the session's sandbox
+/// that is asked — the picker chooses *which* folder a session gets, so it
+/// is above every session — but a sandbox that grants `read-write` on the
+/// root and nothing else, so a name that would land outside it is refused by
+/// the same `check_path` that refuses a tool call.
+async fn post_folders(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<NewFolder>,
+) -> Response {
+    if let Err(refused) = workspace_writable(&state, &headers, "making a folder") {
+        return *refused;
+    }
+    let root = match user_root(&state.app, &owner_key()) {
+        Ok(root) => root,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    let policy = agent_core::sandbox::SandboxPolicy {
+        paths: vec![agent_core::sandbox::PathRule::new(
+            ".",
+            agent_core::sandbox::Access::ReadWrite,
+        )],
+        ..Default::default()
+    };
+    let sandbox = match agent_core::sandbox::Sandbox::new(&policy, &root) {
+        Ok(sandbox) => sandbox,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    match workspace::make_dir(&sandbox, &asked.path, &asked.name).await {
+        Ok(path) => {
+            tracing::info!(target: "luu::workspace", path = path.as_str(), "a folder was made");
+            Json(serde_json::json!({ "path": path })).into_response()
+        }
         Err(error) => workspace_error(error),
     }
 }

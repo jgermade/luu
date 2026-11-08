@@ -333,3 +333,66 @@ test("the pencil renames a file or a folder in place", async ({ page }) => {
 
   expect(errors, "the page threw").toEqual([])
 })
+
+/**
+ * The picker makes the folder a new project needs: `New folder` beside the
+ * crumbs, inside the folder on screen, then into it so *Use this folder*
+ * takes it. A name already there is said where it was typed with nothing
+ * touched, ESC puts the field away without closing the forced picker, and a
+ * way out of the root is refused by the server whatever the page sends.
+ */
+test("the picker makes a new folder and goes into it", async ({ page }) => {
+  const work = join(scratch, "work")
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  const picker = page.locator("dialog.modal").first()
+  await expect(picker).toBeVisible()
+  await expect(picker.locator(".folders .row", { hasText: "src" })).toBeVisible()
+
+  // Taken: said under the field, the field still open, `src` still a folder.
+  await picker.getByRole("button", { name: "New folder" }).click()
+  const field = picker.getByRole("textbox", { name: "Name of the new folder in the workspace" })
+  await expect(field).toBeFocused()
+  await field.fill("src")
+  await field.press("Enter")
+  await expect(picker.getByRole("alert")).toContainText("already exists")
+  expect(existsSync(join(work, "src/long.txt"))).toBe(true)
+
+  // ESC puts the field away; the forced picker stays.
+  await field.press("Escape")
+  await expect(picker.locator(".making")).toHaveCount(0)
+  await expect(picker).toBeVisible()
+
+  // One name, made, and gone into.
+  await picker.getByRole("button", { name: "New folder" }).click()
+  await field.fill("fresh")
+  await picker.getByRole("button", { name: "Create" }).click()
+  await expect(picker.locator(".crumb.on")).toHaveText("fresh")
+  await expect(picker.locator(".chosen")).toContainText("fresh")
+  expect(existsSync(join(work, "fresh"))).toBe(true)
+
+  // And a second level inside it, the crumbs following.
+  await picker.getByRole("button", { name: "New folder" }).click()
+  await picker.getByRole("textbox", { name: "Name of the new folder in fresh" }).fill("app")
+  await picker.getByRole("textbox", { name: "Name of the new folder in fresh" }).press("Enter")
+  await expect(picker.locator(".crumb.on")).toHaveText("app")
+  expect(existsSync(join(work, "fresh/app"))).toBe(true)
+
+  await picker.locator('button:has-text("Use this folder")').click()
+  await expect(picker).toBeHidden()
+
+  // The server's own refusals, whatever a page sends.
+  const post = body => fetch(`${BASE}/api/folders`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  expect((await post({ path: "..", name: "outside" })).status).toBe(400)
+  expect((await post({ path: "", name: "../outside" })).status).toBe(400)
+  expect(existsSync(join(scratch, "outside"))).toBe(false)
+
+  expect(errors, "the page threw").toEqual([])
+})

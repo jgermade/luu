@@ -3003,7 +3003,10 @@ that folder's — roadmap row 49's *the folder chosen becomes the session's base
 filter*. `record::Posture` names it (`record::FORMAT` 27) and a resume makes the session again
 there; a runtime or posture move keeps it. `PUT /api/session/folder` moves a session **before
 its first turn** — after it, its history is about the tree it worked in, and another folder is
-another session. The folder picker browses the root (`GET /api/folders`), *Use this folder*
+another session. The folder picker browses the root (`GET /api/folders`) and makes a folder
+in it (`POST /api/folders {path, name}`: one name, one level, never over what is there, through
+a sandbox granting `read-write` on the root alone; who may is who may rename a file — this
+machine, or a user in their own folder), going into the one it made. *Use this folder*
 moves a fresh session and is remembered for the next ones, and `/api/settings` says `root`,
 `folder` and the other live sessions `shared_with` it. **The page shows them**: each row of
 `GET /api/sessions` that is live carries `live: { state, current }` — `running`, `gate`

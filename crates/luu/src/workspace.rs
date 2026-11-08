@@ -276,6 +276,36 @@ pub async fn rename(sandbox: &Sandbox, relative: &str, name: &str) -> Result<Str
     Ok(renamed)
 }
 
+/// A new, empty folder called `name` inside `parent` (`""` for the base), and
+/// the path it is known by. `name` is one name and never a path, as
+/// [`rename`]'s is; a folder or a file already there is [`Error::Taken`] and
+/// left as it is, so asking twice never empties anything. The parent has to
+/// exist: this makes one level, not a tree.
+pub async fn make_dir(sandbox: &Sandbox, parent: &str, name: &str) -> Result<String, Error> {
+    let parent = parent.trim_start_matches('/').trim_end_matches('/');
+    let name = name.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        return Err(Error::Refused(format!(
+            "`{name}` is not a name: it is empty, a dot, or holds a separator"
+        )));
+    }
+    let made = match parent {
+        "" => name.to_string(),
+        parent => format!("{parent}/{name}"),
+    };
+    let to = writable(sandbox, &made)?;
+    match tokio::fs::create_dir(&to).await {
+        Ok(()) => Ok(made),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(Error::Taken(format!("{made}: already exists")))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Error::Missing(format!("{parent}: not found")))
+        }
+        Err(error) => Err(Error::Failed(format!("{made}: {error}"))),
+    }
+}
+
 /// A path the sandbox grants `read-write` on, resolved as [`resolve`] does.
 fn writable(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
     let check = sandbox.check_path(&sandbox.base().join(relative), Access::ReadWrite);
@@ -915,6 +945,70 @@ mod tests {
             Err(Error::Refused(_))
         ));
         assert!(root.join("src/c.rs").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A new folder is one level, under the base or a folder in it; a name
+    /// already there — a folder or a file — is taken and left alone, a path
+    /// for a name and a way out are refused, and a posture that only reads
+    /// makes nothing.
+    #[tokio::test]
+    async fn a_folder_is_made_once_and_only_inside() {
+        let root = std::env::temp_dir().join(format!("luu-mkdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "a").unwrap();
+        let mut policy = agent_core::sandbox::SandboxPolicy::default();
+        policy.allow(&root, Access::ReadWrite);
+        let sandbox = Sandbox::new(&policy, &root).unwrap();
+
+        assert_eq!(make_dir(&sandbox, "", "app").await.unwrap(), "app");
+        assert!(root.join("app").is_dir());
+        assert_eq!(
+            make_dir(&sandbox, "src/", " lib ").await.unwrap(),
+            "src/lib"
+        );
+        assert!(root.join("src/lib").is_dir());
+
+        // Taken, a folder or a file, and neither touched.
+        std::fs::write(root.join("app/kept.txt"), "kept").unwrap();
+        assert!(matches!(
+            make_dir(&sandbox, "", "app").await,
+            Err(Error::Taken(_))
+        ));
+        assert!(root.join("app/kept.txt").exists());
+        assert!(matches!(
+            make_dir(&sandbox, "src", "a.rs").await,
+            Err(Error::Taken(_))
+        ));
+        assert_eq!(std::fs::read_to_string(root.join("src/a.rs")).unwrap(), "a");
+        // One name, and one level: no path, no parent that is not there.
+        for name in ["../out", "x/y", "..", ".", "  "] {
+            assert!(
+                matches!(make_dir(&sandbox, "", name).await, Err(Error::Refused(_))),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            make_dir(&sandbox, "gone", "x").await,
+            Err(Error::Missing(_))
+        ));
+        assert!(matches!(
+            make_dir(&sandbox, "..", "outside").await,
+            Err(Error::Refused(_))
+        ));
+        assert!(!root.parent().unwrap().join("outside").exists());
+
+        let reading = agent_core::sandbox::SandboxPolicy {
+            paths: vec![agent_core::sandbox::PathRule::new(&root, Access::Read)],
+            ..Default::default()
+        };
+        let reading = Sandbox::new(&reading, &root).unwrap();
+        assert!(matches!(
+            make_dir(&reading, "", "nope").await,
+            Err(Error::Refused(_))
+        ));
+        assert!(!root.join("nope").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -22,16 +22,18 @@
   // way round.
   const [
     { workspace, chooseRoot, closePicker, rootKey, FILES_SPRITE },
-    { currentHost, loadHosts, askHost, goToHost },
+    { currentHost, loadHosts, askHost, tellHost, goToHost },
     { openSettingsAt },
     Modal,
     HostForm,
+    TextInput,
   ] = await C79.importAll([
     "@web/lib/workspace.js",
     "@web/lib/hosts.js",
     "@web/lib/ui.js",
     "@web/components/modal.html",
     "@web/views/inspector/tree/host-form.html",
+    "@web/theme/default/components/text-input.html",
   ])
 
   // `[host.*]`, as this server answers it. A static copy of the page has no
@@ -104,7 +106,60 @@
 
   const browseTo = path => {
     at = path
+    stopMaking()
     list(host, path)
+  }
+
+  // ---- a new folder --------------------------------------------------------
+  //
+  // **The project somebody is about to start has no folder yet**, and a
+  // picker that only lists what exists sent them to a terminal first. `+`
+  // beside the crumbs makes one inside the folder on screen — one name, one
+  // level, never over something already there — and goes into it, so *Use
+  // this folder* takes it. The server decides who may: a person at that
+  // machine, or a user in their own folder (`POST /api/folders`).
+  let making = false
+  let newName = ""
+  let makeError = ""
+  let makeBusy = false
+
+  const startMaking = () => {
+    making = true
+    newName = ""
+    makeError = ""
+    requestAnimationFrame(() => $self(".making input")?.focus())
+  }
+  const stopMaking = () => {
+    making = false
+    makeError = ""
+  }
+  const makeFolder = async () => {
+    const name = newName.trim()
+    if (!name || makeBusy) return
+    if (name.includes("/") || name === "." || name === "..") {
+      makeError = "One name, without a slash: the folder goes in the one on screen."
+      return
+    }
+    makeBusy = true
+    const parent = here
+    const asked = await tellHost(host, "folders", { path: parent, name })
+    makeBusy = false
+    if (!asked.ok) {
+      makeError = asked.error
+      requestAnimationFrame(() => $self(".making input")?.focus())
+      return
+    }
+    // The listing it went into is stale; the one it opens is new.
+    const { [`${host}|${parent}`]: _stale, ...kept } = listings
+    listings = kept
+    browseTo(asked.view.path)
+  }
+  const makingKey = event => {
+    if (event.key !== "Escape") return
+    // The modal's own ESC would otherwise close it, or, forced, refuse to.
+    event.preventDefault()
+    event.stopPropagation()
+    stopMaking()
   }
 
   const reloadHosts = async () => {
@@ -183,10 +238,29 @@
           <p :if="reach[host]?.state === 'down'" class="refused">
             {{ label(host) }} does not answer: {{ reach[host]?.error }}
           </p>
-          <nav :if="reach[host]?.state !== 'down'" class="crumbs">
-            <button :each="crumb in crumbs" :key="crumb.path" type="button" class="crumb"
-                    :class.on="crumb.path === here" @click="browseTo(crumb.path)">{{ crumb.name }}</button>
-          </nav>
+          <div :if="reach[host]?.state !== 'down'" class="crumbs-row">
+            <nav class="crumbs">
+              <button :each="crumb in crumbs" :key="crumb.path" type="button" class="crumb"
+                      :class.on="crumb.path === here" @click="browseTo(crumb.path)">{{ crumb.name }}</button>
+            </nav>
+            <button :if="!making" type="button" class="add new-folder" :disabled="!!listed?.error"
+                    :title="`A new folder in ${here || 'the whole workspace'}`"
+                    @click="startMaking()">
+              <svg class="ic"><use href="#i-plus"/></svg> New folder
+            </button>
+          </div>
+          <div :if="making && reach[host]?.state !== 'down'" class="making">
+            <svg class="ic glyph folder"><use :href="`${FILES_SPRITE}#i-folder`"/></svg>
+            <TextInput size="sm" :model="newName" placeholder="new-project" :invalid="!!makeError"
+                       :disabled="makeBusy" :label="`Name of the new folder in ${here || 'the workspace'}`"
+                       @input="makeError = ''"
+                       @enter="makeFolder()"
+                       @keydown="makingKey($event.detail)" />
+            <button type="button" class="save small" :disabled="makeBusy || !newName.trim()"
+                    @click="makeFolder()">Create</button>
+            <button type="button" class="link small" @click="stopMaking()">Cancel</button>
+          </div>
+          <p :if="making && makeError" class="refused" role="alert">{{ makeError }}</p>
           <ul :if="reach[host]?.state !== 'down'" class="folders list">
             <li :each="row in folders" :key="row.path">
               <button type="button" class="row" :class.ignored="row.ignored" :title="row.path"
@@ -298,12 +372,20 @@
     font-size: 12px;
   }
 
+  .crumbs-row { display: flex; align-items: center; gap: .5rem; }
   .crumbs {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: .15rem;
+    flex: 1;
+    min-width: 0;
   }
+  .new-folder { flex: none; align-self: center; }
+  .making { display: flex; align-items: center; gap: .4rem; }
+  .making > :not(.ic):not(button) { flex: 1; min-width: 0; }
+  .making .ic { color: var(--luu-fg-muted); flex: none; }
+  .making button { flex: none; }
   .crumb {
     background: none;
     border: 0;
