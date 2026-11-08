@@ -1246,9 +1246,11 @@ something in the content column switches to it, because the click already said w
 they want. `Appearance → Layout` pins the two-column mode at any width, and the **chat's head
 narrows to two columns for now** without touching that setting — the last button there, and in
 the content's head too while it is on; the swap and that switch are one control in both heads.
-**A phone is three slides** (below 760px): the chat, the inspector and the content, a screen wide
+**A phone is three slides** (below 760px wide, or a touch screen whose short side is under 760px,
+so a phone held sideways stays a phone): the chat, the inspector and the content, a screen wide
 each, swiped between with CSS scroll snap and the chat first; asking for a column (a file opened,
-the logo) moves to it. See
+the logo) moves to it. The orientation itself is not locked, because a page cannot lock it. See
+[`RECORD/2026-11-08.a-phone-held-sideways.completed.md`](RECORD/2026-11-08.a-phone-held-sideways.completed.md),
 [`RECORD/2026-10-02.the-chat-follows-its-end.completed.md`](RECORD/2026-10-02.the-chat-follows-its-end.completed.md)
 and [`RECORD/2026-10-02.a-phone-is-three-slides.completed.md`](RECORD/2026-10-02.a-phone-is-three-slides.completed.md). The heads and feet are all
 40px, one token (`--chrome-h`), with one exception: the chat's foot is two rows, because what

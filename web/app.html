@@ -165,11 +165,22 @@
   // inspector, the content, left to right, a screen wide each, swiped between
   // and snapping to one. The chat is first because it is what a phone is for.
   const NARROW = 760
+  // A phone is a phone however it is held. Held sideways it is wider than
+  // NARROW, and it used to become two desktop columns 390px tall. So a touch
+  // screen whose *short* side is under NARROW keeps the slides in landscape
+  // too. A web page cannot lock the orientation (Safari has no lock at all,
+  // and Chrome only in fullscreen), so this is the vertical layout kept, not
+  // the screen turned. A desktop window made short has a fine pointer and is
+  // not caught by it.
+  const touch = window.matchMedia("(pointer: coarse)")
+  const isMobile = () =>
+    window.innerWidth < NARROW ||
+    (touch.matches && Math.min(window.innerWidth, window.innerHeight) < NARROW)
   let wide = window.innerWidth >= WIDE
-  let mobile = window.innerWidth < NARROW
+  let mobile = isMobile()
   window.addEventListener("resize", () => {
     wide = window.innerWidth >= WIDE
-    mobile = window.innerWidth < NARROW
+    mobile = isMobile()
   })
 
   // On a phone every column is drawn, and `columns` says three, so nothing

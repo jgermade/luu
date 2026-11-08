@@ -1674,3 +1674,26 @@ test("on a phone the columns are slides: the chat, the inspector, the content", 
   await page.click(".inspector .logo")
   await expect.poll(onScreen).toBe("chat")
 })
+
+/**
+ * A phone held sideways is still a phone: 844 wide is past the breakpoint, and
+ * a touch screen whose short side is under it keeps the slides rather than
+ * becoming two desktop columns 390px tall. A desktop window that short does
+ * not: its pointer is fine.
+ */
+test.describe("a phone held sideways", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 844, height: 390 } })
+  test("keeps the slides", async ({ page }) => {
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await expect(page.locator(".app")).toHaveAttribute("data-columns", "slides")
+    await expect(page.locator(".swap, button.columns")).toHaveCount(0)
+  })
+})
+
+test("a short desktop window is not a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await expect(page.locator(".app")).not.toHaveAttribute("data-columns", "slides")
+})
