@@ -1674,3 +1674,131 @@ test("on a phone the columns are slides: the chat, the inspector, the content", 
   await page.click(".inspector .logo")
   await expect.poll(onScreen).toBe("chat")
 })
+
+/**
+ * A phone held sideways is still a phone: 844 wide is past the breakpoint, and
+ * a touch screen whose short side is under it keeps the slides rather than
+ * becoming two desktop columns 390px tall. A desktop window that short does
+ * not: its pointer is fine.
+ */
+test.describe("a phone held sideways", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 844, height: 390 } })
+  test("keeps the slides", async ({ page }) => {
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await expect(page.locator(".app")).toHaveAttribute("data-columns", "slides")
+    await expect(page.locator(".swap, button.columns")).toHaveCount(0)
+  })
+})
+
+/**
+ * Settings on a phone is a sheet: the whole width, up from the bottom, the
+ * sections a row at its foot, and its head pulled down to close it. A short
+ * pull springs back.
+ */
+test.describe("Settings on a phone", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+  test("is a sheet from the bottom, with the sections in a row below", async ({ page }) => {
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    const sheet = page.locator("dialog.modal.sheet")
+    await expect(sheet).toBeVisible()
+    // Waited for rather than slept on: the slide up ends on the bottom edge,
+    // however long a loaded machine takes to draw it.
+    const bottom = async () => { const b = await sheet.boundingBox(); return Math.round(b.y + b.height) }
+    await expect.poll(bottom, { timeout: 10_000 }).toBe(844)
+    const box = await sheet.boundingBox()
+    expect(Math.round(box.x)).toBe(0)
+    expect(Math.round(box.width)).toBe(390)
+
+    // The sections are a row under the content, and choosing one draws it.
+    const rail = sheet.locator(".rail.horizontal")
+    await expect(rail).toBeVisible()
+    const pane = await sheet.locator(".pane").boundingBox()
+    expect((await rail.boundingBox()).y).toBeGreaterThanOrEqual(pane.y + pane.height - 1)
+    await rail.locator('button:has-text("Models")').click()
+    await expect(sheet.locator('.section.on[data-section="models"]')).toBeVisible()
+    const section = await sheet.locator('.section.on[data-section="models"]').boundingBox()
+    expect(section.width).toBeGreaterThan(380)
+
+    // A short pull on the head springs back; a long one closes it.
+    const head = await sheet.locator(".modal-head").boundingBox()
+    const pull = async dy => {
+      await page.mouse.move(head.x + head.width / 2, head.y + 12)
+      await page.mouse.down()
+      for (let step = 1; step <= 8; step++) {
+        await page.mouse.move(head.x + head.width / 2, head.y + 12 + (dy * step) / 8)
+      }
+      await page.mouse.up()
+    }
+    await pull(60)
+    await expect(sheet).toBeVisible()
+    await expect.poll(bottom, { timeout: 10_000 }).toBe(844)
+    await pull(400)
+    await expect(page.locator("dialog.modal")).toHaveCount(0)
+  })
+})
+
+/**
+ * Every dialog on a phone is a sheet, not only Settings: the project picker
+ * (the page's own Modal), the sessions dialog (the theme's TabModal) and a
+ * turn's context. Each is the whole width and sits on the bottom edge, and a
+ * pull on its head closes the ones that may be closed.
+ */
+test.describe("dialogs on a phone", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+  test("are all sheets, pulled down to close", async ({ page }) => {
+    const onTheBottomEdge = async dialog => {
+      await expect.poll(async () => {
+        const b = await dialog.boundingBox()
+        return b && [Math.round(b.x), Math.round(b.width), Math.round(b.y + b.height)]
+      }, { timeout: 10_000 }).toEqual([0, 390, 844])
+    }
+    const pullDown = async dialog => {
+      const head = await dialog.locator("header").first().boundingBox()
+      const x = head.x + head.width / 2
+      await page.mouse.move(x, head.y + 6)
+      await page.mouse.down()
+      for (let step = 1; step <= 8; step++) await page.mouse.move(x, head.y + 6 + step * 50)
+      await page.mouse.up()
+    }
+
+    await page.goto(`${BASE}/index.html`)
+    // The first visit's folder picker: the page's own Modal, and locked.
+    const picker = page.locator("dialog.modal.sheet").first()
+    await expect(picker).toBeVisible()
+    await onTheBottomEdge(picker)
+    await chooseFolder(page)
+
+    // The sessions dialog: the theme's TabModal.
+    await page.click('button[title="Earlier sessions"]')
+    const sessions = page.locator("dialog.modal.sheet").first()
+    await expect(sessions).toBeVisible()
+    await onTheBottomEdge(sessions)
+    await pullDown(sessions)
+    await expect(page.locator("dialog.modal[open]")).toHaveCount(0)
+
+    // A turn's context: the page's Modal again. One prompt first, so there is
+    // a turn to show.
+    const composer = page.locator(".composer input")
+    await expect(composer).toBeEnabled()
+    await composer.fill("hola")
+    await page.click('.composer button[type="submit"]')
+    const ctx = page.locator("footer.chat-foot button.ctx")
+    await expect(ctx).toBeEnabled({ timeout: 30_000 })
+    await ctx.click()
+    const context = page.locator("dialog.modal.sheet").first()
+    await expect(context).toBeVisible()
+    await onTheBottomEdge(context)
+    await pullDown(context)
+    await expect(page.locator("dialog.modal[open]")).toHaveCount(0)
+  })
+})
+
+test("a short desktop window is not a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await expect(page.locator(".app")).not.toHaveAttribute("data-columns", "slides")
+})

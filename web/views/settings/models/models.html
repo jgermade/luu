@@ -307,11 +307,18 @@
   /* One height, as the new session's box: lists arriving do not move it. */
   .browse {
     height: 18rem;
+    /* What `provider-models.html` measures itself against: under 34rem the
+       providers go above their models instead of beside them. */
+    container-type: inline-size;
     border: 1px solid var(--luu-border);
     border-radius: 8px;
     background: var(--luu-surface, #ffffff);
     box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
     overflow: hidden;
+  }
+  /* On a phone the providers sit above their models, so the box is taller. */
+  @media (max-width: 760px), (pointer: coarse) and (max-height: 760px) {
+    .browse { height: 26rem; }
   }
   .browse .said { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .browse .ic { width: 14px; height: 14px; }

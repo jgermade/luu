@@ -254,6 +254,20 @@
     height: 100%;
     min-height: 0;
   }
+  /* **Narrow, the providers go above their models**: beside them, on a phone,
+     the models' column was 90px. Measured against the nearest container
+     (Settings → Models' `.browse`), not the window, because the same
+     component sits in a picker and a dialog of other widths. */
+  @container (max-width: 34rem) {
+    .cols {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 7.5rem) minmax(0, 1fr);
+    }
+    .providers {
+      border-right: 0;
+      border-bottom: 1px solid var(--luu-border);
+    }
+  }
   /* Every space in this column is a step of .5rem. */
   .providers {
     list-style: none;

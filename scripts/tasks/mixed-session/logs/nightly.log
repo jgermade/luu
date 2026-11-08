@@ -1,0 +1,157 @@
+2026-11-07 02:00:00 INFO  nightly: start: 180 orders in data/orders.csv
+2026-11-07 02:00:01 INFO  nightly: invoiced A-4331 SE net 63.50 € moms 3.96 € total 67.46 €
+2026-11-07 02:00:02 INFO  nightly: invoiced A-4332 NL net 34.83 € BTW 3.10 € total 37.93 €
+2026-11-07 02:00:02 INFO  nightly: invoiced A-4333 FR net 89.93 € TVA 1.80 € total 91.73 €
+2026-11-07 02:00:03 INFO  nightly: invoiced A-4334 PL net 119.40 € VAT 27.46 € total 146.86 €
+2026-11-07 02:00:04 INFO  nightly: invoiced A-4335 SE net 16.20 € moms 2.03 € total 18.23 €
+2026-11-07 02:00:05 INFO  nightly: invoiced A-4336 PT net 12.26 € IVA 2.06 € total 14.32 €
+2026-11-07 02:00:05 INFO  nightly: invoiced A-4337 DE net 52.90 € MwSt. 10.05 € total 62.95 €
+2026-11-07 02:00:06 INFO  nightly: invoiced A-4338 PL net 55.85 € VAT 2.54 € total 58.39 €
+2026-11-07 02:00:07 INFO  nightly: invoiced A-4339 SE net 8.91 € moms 1.11 € total 10.02 €
+2026-11-07 02:00:08 INFO  nightly: invoiced A-4340 FR net 158.70 € TVA 31.74 € total 190.44 €
+2026-11-07 02:00:08 INFO  nightly: invoiced A-4341 FR net 9.00 € TVA 1.80 € total 10.80 €
+2026-11-07 02:00:09 INFO  nightly: invoiced A-4342 ES net 24.90 € IVA 5.23 € total 30.13 €
+2026-11-07 02:00:10 INFO  nightly: invoiced A-4343 HU net 52.90 € ÁFA 14.28 € total 67.18 €
+2026-11-07 02:00:10 INFO  nightly: invoiced A-4344 NL net 19.90 € BTW 4.18 € total 24.08 €
+2026-11-07 02:00:11 INFO  nightly: invoiced A-4345 DE net 4.05 € MwSt. 0.29 € total 4.34 €
+2026-11-07 02:00:12 INFO  nightly: invoiced A-4346 ES net 9.00 € IVA 1.89 € total 10.89 €
+2026-11-07 02:00:13 INFO  nightly: invoiced A-4347 IT net 44.97 € IVA 1.66 € total 46.63 €
+2026-11-07 02:00:13 INFO  nightly: invoiced A-4348 ES net 87.60 € IVA 18.40 € total 106.00 €
+2026-11-07 02:00:14 INFO  nightly: invoiced A-4349 DE net 18.00 € MwSt. 3.42 € total 21.42 €
+2026-11-07 02:00:15 INFO  nightly: invoiced A-4350 DE net 24.30 € MwSt. 1.73 € total 26.03 €
+2026-11-07 02:00:16 INFO  nightly: invoiced A-4351 FR net 201.02 € TVA 28.14 € total 229.16 €
+2026-11-07 02:00:16 INFO  nightly: invoiced A-4352 PL net 149.70 € VAT 34.43 € total 184.13 €
+2026-11-07 02:00:17 INFO  nightly: invoiced A-4353 FR net 70.97 € TVA 9.93 € total 80.90 €
+2026-11-07 02:00:18 INFO  nightly: invoiced A-4354 ES net 25.80 € IVA 5.42 € total 31.22 €
+2026-11-07 02:00:19 INFO  nightly: invoiced A-4355 IT net 13.41 € IVA 1.31 € total 14.72 €
+2026-11-07 02:00:19 INFO  nightly: invoiced A-4356 DE net 84.66 € MwSt. 0.97 € total 85.63 €
+2026-11-07 02:00:20 INFO  nightly: invoiced A-4357 FR net 142.22 € TVA 19.91 € total 162.13 €
+2026-11-07 02:00:21 INFO  nightly: invoiced A-4358 DE net 35.82 € MwSt. 2.54 € total 38.36 €
+2026-11-07 02:00:21 INFO  nightly: invoiced A-4359 DE net 179.64 € MwSt. 12.75 € total 192.39 €
+2026-11-07 02:00:22 INFO  nightly: invoiced A-4360 FR net 14.31 € TVA 1.14 € total 15.45 €
+2026-11-07 02:00:23 INFO  nightly: invoiced A-4361 SE net 59.40 € moms 14.85 € total 74.25 €
+2026-11-07 02:00:24 INFO  nightly: invoiced A-4362 ES net 10.63 € IVA 0.30 € total 10.93 €
+2026-11-07 02:00:24 INFO  nightly: invoiced A-4363 FR net 87.60 € TVA 17.52 € total 105.12 €
+2026-11-07 02:00:25 INFO  nightly: invoiced A-4364 DE net 30.21 € MwSt. 3.94 € total 34.15 €
+2026-11-07 02:00:26 INFO  nightly: invoiced A-4365 ES net 4.50 € IVA 0.95 € total 5.45 €
+2026-11-07 02:00:27 INFO  nightly: invoiced A-4366 FR net 4.50 € TVA 0.90 € total 5.40 €
+2026-11-07 02:00:27 INFO  nightly: invoiced A-4367 DK net 10.32 € moms 0.00 € total 10.32 €
+2026-11-07 02:00:28 INFO  nightly: invoiced A-4368 SE net 199.60 € moms 49.90 € total 249.50 €
+2026-11-07 02:00:29 INFO  nightly: invoiced A-4369 ES net 79.60 € IVA 16.72 € total 96.32 €
+2026-11-07 02:00:29 INFO  nightly: invoiced A-4370 ES net 15.92 € IVA -0.51 € total 15.41 €
+2026-11-07 02:00:30 INFO  nightly: invoiced A-4371 DK net 253.92 € moms 0.00 € total 253.92 €
+2026-11-07 02:00:31 INFO  nightly: invoiced A-4372 FR net 119.40 € TVA 23.88 € total 143.28 €
+2026-11-07 02:00:32 INFO  nightly: invoiced A-4373 ES net 11.88 € IVA 1.77 € total 13.65 €
+2026-11-07 02:00:32 INFO  nightly: invoiced A-4374 FR net 13.50 € TVA 2.70 € total 16.20 €
+2026-11-07 02:00:33 INFO  nightly: invoiced A-4375 DE net 42.42 € MwSt. 0.48 € total 42.90 €
+2026-11-07 02:00:34 INFO  nightly: invoiced A-4376 ES net 20.81 € IVA 3.11 € total 23.92 €
+2026-11-07 02:00:35 INFO  nightly: invoiced A-4377 IE net 19.90 € VAT 4.58 € total 24.48 €
+2026-11-07 02:00:35 INFO  nightly: invoiced A-4378 DE net 21.90 € MwSt. 4.16 € total 26.06 €
+2026-11-07 02:00:36 INFO  nightly: invoiced A-4379 IT net 4.05 € IVA 0.40 € total 4.45 €
+2026-11-07 02:00:37 INFO  nightly: invoiced A-4380 FR net 15.90 € TVA 3.18 € total 19.08 €
+2026-11-07 02:00:38 INFO  nightly: invoiced A-4381 IT net 53.73 € IVA 5.27 € total 59.00 €
+2026-11-07 02:00:38 INFO  nightly: invoiced A-4382 DE net 39.80 € MwSt. 7.56 € total 47.36 €
+2026-11-07 02:00:39 INFO  nightly: invoiced A-4383 DE net 24.90 € MwSt. 4.73 € total 29.63 €
+2026-11-07 02:00:40 INFO  nightly: invoiced A-4384 DE net 8.42 € MwSt. 0.09 € total 8.51 €
+2026-11-07 02:00:40 INFO  nightly: invoiced A-4385 DE net 119.40 € MwSt. 22.69 € total 142.09 €
+2026-11-07 02:00:41 INFO  nightly: invoiced A-4386 DE net 22.41 € MwSt. 1.59 € total 24.00 €
+2026-11-07 02:00:42 INFO  nightly: invoiced A-4387 DE net 12.50 € MwSt. 2.38 € total 14.88 €
+2026-11-07 02:00:43 INFO  nightly: invoiced A-4388 DE net 158.70 € MwSt. 30.15 € total 188.85 €
+2026-11-07 02:00:43 INFO  nightly: invoiced A-4389 IT net 53.46 € IVA 5.24 € total 58.70 €
+2026-11-07 02:00:44 INFO  nightly: invoiced A-4390 FR net 49.90 € TVA 9.98 € total 59.88 €
+2026-11-07 02:00:45 INFO  nightly: invoiced A-4391 FR net 47.68 € TVA -1.91 € total 45.77 €
+2026-11-07 02:00:46 INFO  nightly: invoiced A-4392 DE net 11.48 € MwSt. 0.13 € total 11.61 €
+2026-11-07 02:00:46 INFO  nightly: invoiced A-4393 FR net 9.90 € TVA 1.98 € total 11.88 €
+2026-11-07 02:00:47 INFO  nightly: invoiced A-4394 SE net 158.70 € moms 39.68 € total 198.38 €
+2026-11-07 02:00:48 INFO  nightly: invoiced A-4395 IT net 87.60 € IVA 19.27 € total 106.87 €
+2026-11-07 02:00:48 INFO  nightly: invoiced A-4396 DE net 52.90 € MwSt. 10.05 € total 62.95 €
+2026-11-07 02:00:49 INFO  nightly: invoiced A-4397 HU net 44.70 € ÁFA 12.07 € total 56.77 €
+2026-11-07 02:00:50 INFO  nightly: invoiced A-4398 ES net 211.60 € IVA 44.44 € total 256.04 €
+2026-11-07 02:00:51 INFO  nightly: invoiced A-4399 FR net 15.90 € TVA 3.18 € total 19.08 €
+2026-11-07 02:00:51 INFO  nightly: invoiced A-4400 ES net 19.90 € IVA 4.18 € total 24.08 €
+2026-11-07 02:00:52 INFO  nightly: invoiced A-4401 FR net 87.60 € TVA 17.52 € total 105.12 €
+2026-11-07 02:00:53 INFO  nightly: invoiced A-4402 FR net 14.31 € TVA 1.14 € total 15.45 €
+2026-11-07 02:00:54 INFO  nightly: invoiced A-4403 ES net 12.90 € IVA 2.71 € total 15.61 €
+2026-11-07 02:00:54 INFO  nightly: invoiced A-4404 PL net 53.46 € VAT 5.72 € total 59.18 €
+2026-11-07 02:00:55 INFO  nightly: invoiced A-4405 AT net 17.91 € USt. 1.43 € total 19.34 €
+2026-11-07 02:00:56 INFO  nightly: invoiced A-4406 CH net 4.05 € MWST -0.11 € total 3.94 €
+2026-11-07 02:00:57 INFO  nightly: invoiced A-4407 DE net 14.31 € MwSt. 1.02 € total 15.33 €
+2026-11-07 02:00:57 INFO  nightly: invoiced A-4408 DE net 134.46 € MwSt. 9.55 € total 144.01 €
+2026-11-07 02:00:58 INFO  nightly: invoiced A-4409 DE net 12.50 € MwSt. 2.38 € total 14.88 €
+2026-11-07 02:00:59 INFO  nightly: invoiced A-4410 ES net 23.22 € IVA 2.07 € total 25.29 €
+2026-11-07 02:00:59 INFO  nightly: invoiced A-4411 NL net 37.62 € BTW 5.62 € total 43.24 €
+2026-11-07 02:01:00 INFO  nightly: invoiced A-4412 PL net 18.91 € VAT 3.18 € total 22.09 €
+2026-11-07 02:01:01 INFO  nightly: invoiced A-4413 ES net 31.80 € IVA 6.68 € total 38.48 €
+2026-11-07 02:01:02 INFO  nightly: invoiced A-4414 ES net 19.92 € IVA -0.64 € total 19.28 €
+2026-11-07 02:01:02 INFO  nightly: invoiced A-4415 PT net 18.81 € IVA 3.17 € total 21.98 €
+2026-11-07 02:01:03 INFO  nightly: invoiced A-4416 FR net 18.81 € TVA 2.63 € total 21.44 €
+2026-11-07 02:01:04 INFO  nightly: invoiced A-4417 DE net 9.90 € MwSt. 1.88 € total 11.78 €
+2026-11-07 02:01:05 INFO  nightly: invoiced A-4418 ES net 22.41 € IVA 1.99 € total 24.40 €
+2026-11-07 02:01:05 INFO  nightly: invoiced A-4419 PL net 17.52 € VAT -0.28 € total 17.24 €
+2026-11-07 02:01:06 INFO  nightly: invoiced A-4420 DE net 17.91 € MwSt. 1.27 € total 19.18 €
+2026-11-07 02:01:07 INFO  nightly: invoiced A-4421 IT net 134.46 € IVA 13.18 € total 147.64 €
+2026-11-07 02:01:07 INFO  nightly: invoiced A-4422 DE net 12.90 € MwSt. 2.45 € total 15.35 €
+2026-11-07 02:01:08 INFO  nightly: invoiced A-4423 PT net 14.90 € IVA 3.43 € total 18.33 €
+2026-11-07 02:01:09 INFO  nightly: invoiced A-4424 FR net 47.70 € TVA 9.54 € total 57.24 €
+2026-11-07 02:01:10 INFO  nightly: invoiced A-4425 IT net 134.73 € IVA 13.20 € total 147.93 €
+2026-11-07 02:01:10 INFO  nightly: invoiced A-4426 DE net 12.26 € MwSt. 1.59 € total 13.85 €
+2026-11-07 02:01:11 INFO  nightly: invoiced A-4427 DE net 59.60 € MwSt. 11.32 € total 70.92 €
+2026-11-07 02:01:12 INFO  nightly: invoiced A-4428 NL net 16.20 € BTW 1.44 € total 17.64 €
+2026-11-07 02:01:13 INFO  nightly: invoiced A-4429 FR net 31.68 € TVA -1.27 € total 30.41 €
+2026-11-07 02:01:13 INFO  nightly: invoiced A-4430 ES net 4.50 € IVA 0.95 € total 5.45 €
+2026-11-07 02:01:14 INFO  nightly: invoiced A-4431 CZ net 14.90 € DPH 3.13 € total 18.03 €
+2026-11-07 02:01:15 INFO  nightly: invoiced A-4432 PL net 25.80 € VAT 5.93 € total 31.73 €
+2026-11-07 02:01:16 INFO  nightly: invoiced A-4433 FR net 78.84 € TVA 6.31 € total 85.15 €
+2026-11-07 02:01:16 INFO  nightly: invoiced A-4434 ES net 24.90 € IVA 5.23 € total 30.13 €
+2026-11-07 02:01:17 INFO  nightly: invoiced A-4435 ES net 17.52 € IVA -0.56 € total 16.96 €
+2026-11-07 02:01:18 INFO  nightly: invoiced A-4436 SE net 30.96 € moms 0.00 € total 30.96 €
+2026-11-07 02:01:18 INFO  nightly: invoiced A-4437 DE net 3.83 € MwSt. 0.04 € total 3.87 €
+2026-11-07 02:01:19 INFO  nightly: invoiced A-4438 PT net 15.11 € IVA 2.54 € total 17.65 €
+2026-11-07 02:01:20 INFO  nightly: invoiced A-4439 ES net 39.80 € IVA 8.36 € total 48.16 €
+2026-11-07 02:01:21 INFO  nightly: invoiced A-4440 FR net 59.40 € TVA 11.88 € total 71.28 €
+2026-11-07 02:01:21 INFO  nightly: invoiced A-4441 DE net 22.41 € MwSt. 1.59 € total 24.00 €
+2026-11-07 02:01:22 INFO  nightly: invoiced A-4442 DE net 12.90 € MwSt. 2.45 € total 15.35 €
+2026-11-07 02:01:23 INFO  nightly: invoiced A-4443 ES net 24.90 € IVA 5.23 € total 30.13 €
+2026-11-07 02:01:24 INFO  nightly: invoiced A-4444 NL net 71.52 € BTW -2.29 € total 69.23 €
+2026-11-07 02:01:24 INFO  nightly: invoiced A-4445 SE net 25.44 € moms 0.00 € total 25.44 €
+2026-11-07 02:01:25 INFO  nightly: invoiced A-4446 ES net 83.22 € IVA 12.44 € total 95.66 €
+2026-11-07 02:01:26 INFO  nightly: invoiced A-4447 PL net 36.77 € VAT 6.19 € total 42.96 €
+2026-11-07 02:01:26 INFO  nightly: invoiced A-4448 DE net 71.52 € MwSt. -3.43 € total 68.09 €
+2026-11-07 02:01:27 INFO  nightly: invoiced A-4449 FR net 23.66 € TVA 3.31 € total 26.97 €
+2026-11-07 02:01:28 INFO  nightly: invoiced A-4450 CH net 26.82 € MWST -0.73 € total 26.09 €
+2026-11-07 02:01:29 INFO  nightly: invoiced A-4451 PL net 269.46 € VAT 28.83 € total 298.29 €
+2026-11-07 02:01:29 INFO  nightly: invoiced A-4452 NL net 317.40 € BTW 66.65 € total 384.05 €
+2026-11-07 02:01:30 INFO  nightly: invoiced A-4453 DE net 35.82 € MwSt. 2.54 € total 38.36 €
+2026-11-07 02:01:31 INFO  nightly: invoiced A-4454 FR net 46.44 € TVA 3.72 € total 50.16 €
+2026-11-07 02:01:32 INFO  nightly: invoiced A-4455 FR net 31.84 € TVA -1.27 € total 30.57 €
+2026-11-07 02:01:32 INFO  nightly: invoiced A-4456 ES net 65.70 € IVA 13.80 € total 79.50 €
+2026-11-07 02:01:33 INFO  nightly: invoiced A-4457 PT net 269.46 € IVA 28.83 € total 298.29 €
+2026-11-07 02:01:34 INFO  nightly: invoiced A-4458 NL net 10.97 € BTW 0.31 € total 11.28 €
+2026-11-07 02:01:35 INFO  nightly: invoiced A-4459 PL net 149.70 € VAT 34.43 € total 184.13 €
+2026-11-07 02:01:35 INFO  nightly: invoiced A-4460 NO net 8.55 € MVA 1.60 € total 10.15 €
+2026-11-07 02:01:36 INFO  nightly: invoiced A-4461 DE net 134.46 € MwSt. 9.55 € total 144.01 €
+2026-11-07 02:01:37 INFO  nightly: invoiced A-4462 IT net 71.64 € IVA 7.02 € total 78.66 €
+2026-11-07 02:01:37 INFO  nightly: invoiced A-4463 PL net 67.66 € VAT 3.08 € total 70.74 €
+2026-11-07 02:01:38 INFO  nightly: invoiced A-4464 PT net 9.00 € IVA 2.07 € total 11.07 €
+2026-11-07 02:01:39 INFO  nightly: invoiced A-4465 NL net 95.22 € BTW 8.47 € total 103.69 €
+2026-11-07 02:01:40 INFO  nightly: invoiced A-4466 ES net 47.41 € IVA 7.08 € total 54.49 €
+2026-11-07 02:01:40 INFO  nightly: invoiced A-4467 IT net 12.90 € IVA 2.84 € total 15.74 €
+2026-11-07 02:01:41 INFO  nightly: invoiced A-4468 IT net 33.83 € IVA 1.25 € total 35.08 €
+2026-11-07 02:01:42 INFO  nightly: invoiced A-4469 BE net 47.52 € BTW -1.52 € total 46.00 €
+2026-11-07 02:01:43 INFO  nightly: invoiced A-4470 FI net 85.86 € ALV 9.96 € total 95.82 €
+2026-11-07 02:01:43 ERROR nightly: order A-4471 (Greta Almeida): cannot invoice
+2026-11-07 02:01:44 ERROR nightly: Traceback (most recent call last):
+2026-11-07 02:01:45 ERROR nightly:   File "/srv/orderbook/orderbook/nightly.py", line 80, in run
+2026-11-07 02:01:45 ERROR nightly:     invoice = make_invoice(order)
+2026-11-07 02:01:46 ERROR nightly:   File "/srv/orderbook/orderbook/invoice.py", line 212, in make_invoice
+2026-11-07 02:01:47 ERROR nightly:     total = invoice_total(order)
+2026-11-07 02:01:48 ERROR nightly:   File "/srv/orderbook/orderbook/invoice.py", line 200, in invoice_total
+2026-11-07 02:01:48 ERROR nightly:     return round_cents(net + tax(order, net))
+2026-11-07 02:01:49 ERROR nightly:                              ~~~^^^^^^^^^^^^
+2026-11-07 02:01:50 ERROR nightly:   File "/srv/orderbook/orderbook/invoice.py", line 160, in tax
+2026-11-07 02:01:51 ERROR nightly:     return amount * rates.vat_rate(order.region)
+2026-11-07 02:01:51 ERROR nightly:                     ~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+2026-11-07 02:01:52 ERROR nightly:   File "/srv/orderbook/orderbook/rates.py", line 81, in vat_rate
+2026-11-07 02:01:53 ERROR nightly:     raise UnknownRegion(region) from None
+2026-11-07 02:01:54 ERROR nightly: orderbook.rates.UnknownRegion: 'IS'
+2026-11-07 02:01:54 INFO  nightly: stopped after 140 of 180 orders

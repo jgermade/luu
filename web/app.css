@@ -371,6 +371,16 @@ dialog:has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
   overflow-wrap: anywhere;
 }
 .settings dd { grid-column: 2; margin: 0; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+/* **On a phone the label goes over its value**, the whole width each: beside
+   it, a 9rem label left a field a third of a phone. The phone rule is
+   `lib/phone.js`'s, held sideways included. */
+@media (max-width: 760px), (pointer: coarse) and (max-height: 760px) {
+  .settings { grid-template-columns: minmax(0, 1fr); gap: .2rem; }
+  .settings dt, .settings dd { grid-column: 1; }
+  .settings dt { padding-top: .6rem; }
+  .settings dd > input:not([type="checkbox"]):not([type="radio"]),
+  .settings dd > select { flex: 1 1 100%; min-width: 0; }
+}
 .settings dd > .warn, .settings dd > .error {
   flex-basis: 100%;
   font-size: 11px;

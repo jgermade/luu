@@ -43,6 +43,7 @@
     Scrollable,
     { snippet, snippetHtml, copySnippet, previewable, previewSnippet },
     { later },
+    { isPhone },
   ] = await C79.importAll([
     "@web/lib/store.js",
     "@web/lib/prefs.js",
@@ -74,6 +75,7 @@
     "@web/theme/default/components/scrollable.html",
     "@web/lib/snippet.js",
     "@web/lib/later.js",
+    "@web/lib/phone.js",
   ])
   // What the page draws only when a person asks for it — every dialog, the
   // folder picker, the terminal panel — is asked for the first time it opens,
@@ -164,12 +166,14 @@
   // A phone: below this, the three columns are slides — the chat, the
   // inspector, the content, left to right, a screen wide each, swiped between
   // and snapping to one. The chat is first because it is what a phone is for.
-  const NARROW = 760
+  // A phone is a phone however it is held: a touch screen whose short side is
+  // under 760px keeps the slides in landscape too. The rule is
+  // `@web/lib/phone.js`'s, shared with Settings' bottom sheet.
   let wide = window.innerWidth >= WIDE
-  let mobile = window.innerWidth < NARROW
+  let mobile = isPhone()
   window.addEventListener("resize", () => {
     wide = window.innerWidth >= WIDE
-    mobile = window.innerWidth < NARROW
+    mobile = isPhone()
   })
 
   // On a phone every column is drawn, and `columns` says three, so nothing

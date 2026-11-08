@@ -364,7 +364,8 @@
   }
   .modal-actions .save { margin-left: 0; }
 
-  @media (max-width: 760px) {
+  /* A phone held sideways is a phone too: the same rule as the page's slides. */
+  @media (max-width: 760px), (pointer: coarse) and (max-height: 760px) {
     .project { grid-template-columns: 1fr; height: auto; }
     .hosts .list, .folders { max-height: 12rem; }
   }

@@ -1,4 +1,4 @@
-<script :setup="{ items = [], model = '' }">
+<script :setup="{ items = [], model = '', horizontal = false }">
   // A vertical list of sections with a bar in the accent colour beside the
   // chosen one, springing to it. It was a dot; a bar says *this one* by standing
   // beside the whole item rather than beside its middle. No line joins the
@@ -16,6 +16,11 @@
   //
   // Without a slot an item draws its `label`. The choice goes back up through
   // `:model` when the tag binds one, and always as `change`.
+  //
+  // **`horizontal`** lays the same items in a row that scrolls sideways and
+  // snaps, with the bar under the chosen one, which is kept in view. That is
+  // the rail at the foot of Settings on a phone, where a column of sections
+  // beside the content would leave the content no width.
 
   // Where the accent stretch is — the chosen item's top and height, in the
   // rail's own pixels — or `null` before the first measurement. `moving` is the
@@ -27,7 +32,10 @@
   const place = () => {
     const on = $self("button.on")
     if (!on || !on.offsetHeight) return
-    at = { y: on.offsetTop, h: on.offsetHeight }
+    at = horizontal
+      ? { x: on.offsetLeft, w: on.offsetWidth }
+      : { y: on.offsetTop, h: on.offsetHeight }
+    if (horizontal) on.scrollIntoView?.({ inline: "center", block: "nearest", behavior: moving ? "smooth" : "auto" })
     if (!moving) requestAnimationFrame(() => { moving = true })
   }
 
@@ -41,11 +49,15 @@
   const sizes = new ResizeObserver(() => place())
   sizes.observe($self(".rail"))
   $destroyed(() => sizes.disconnect())
-  $: (model, items, requestAnimationFrame(place))
-  $: mark = at === null ? "display:none" : `height:${at.h}px;transform:translateY(${at.y}px)`
+  $: (model, items, horizontal, requestAnimationFrame(place))
+  $: mark = at === null
+    ? "display:none"
+    : horizontal
+    ? `width:${at.w}px;transform:translateX(${at.x}px)`
+    : `height:${at.h}px;transform:translateY(${at.y}px)`
 </script>
 
-<nav class="rail" :class.moving="moving">
+<nav class="rail" :class.moving="moving" :class.horizontal="horizontal">
   <span class="mark" :style="mark" aria-hidden="true"></span>
   <button
     :each="item in items"
@@ -96,6 +108,38 @@
   }
   button:hover { color: var(--luu-fg, #1a1d23); background: var(--luu-bg, #f4f5f8); }
   button.on { color: var(--luu-fg, #1a1d23); }
+  /* ---- in a row, scrolled sideways, the bar under the chosen one */
+  .rail.horizontal {
+    flex-direction: row;
+    gap: .25rem;
+    padding: 0 .5rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .rail.horizontal::-webkit-scrollbar { display: none; }
+  .rail.horizontal .mark {
+    top: auto;
+    bottom: 0;
+    width: auto;
+    height: 2px;
+  }
+  .rail.horizontal.moving .mark {
+    transition: transform .28s cubic-bezier(.34, 1.56, .64, 1), width .2s ease;
+  }
+  .rail.horizontal button {
+    flex: 0 0 auto;
+    width: auto;
+    flex-direction: column;
+    gap: .2rem;
+    padding: .45rem .7rem .55rem;
+    font-size: 12px;
+    white-space: nowrap;
+    scroll-snap-align: center;
+  }
+  .rail.horizontal button:hover { background: none; }
   @media (prefers-reduced-motion: reduce) {
     .rail.moving .mark { transition: none; }
   }
