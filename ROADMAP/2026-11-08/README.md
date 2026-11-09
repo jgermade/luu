@@ -170,7 +170,7 @@ gantt
     section B — the window
     The 27B call format (raw reply kept)   :fmt, 2026-11-09, 1d
     A citation that says where             :ptr, after run, 2d
-    Drift under a tool's own name          :drift, after fmt, 2d
+    Drift under a tool's own name (built)  :done, drift, 2026-11-09, 1d
     Denominators                           :tally, after drift, 1d
     section C — the gate
     Two sites choose the floor (done)      :done, sites, 2026-11-09, 1d
