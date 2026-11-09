@@ -342,6 +342,13 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible()
   await live.locator("button.trigger").click()
+  // Inside a job, what holds its turns is the plan, not the floor: the menu
+  // says what was approved.
+  await expect(page.getByRole("menuitem", { name: /What it may do/ }).locator(".note"))
+    .toContainText("reads AGENTS.md")
+  // It asked for the network, and the session has none: not reached.
+  await expect(page.getByRole("menuitem", { name: /What it may do/ }).locator(".note"))
+    .not.toContainText("network")
   await page.getByRole("menuitem", { name: /Close & fold/ }).click()
   await expect(live).toBeHidden({ timeout: 15_000 })
   await expect(page.locator(".fold .summary").first()).toBeVisible()
@@ -1279,6 +1286,11 @@ async function gateOnWidePosture(page) {
   // title, and in the fold it becomes.
   await expect(live.locator("button.trigger")).toHaveText("draft")
   await live.locator("button.trigger").click()
+  // What the draft's turns may reach, with no gate up: the floor, in the same
+  // words the gate uses. Row 44 of `ROADMAP/2026-11-08`.
+  const reach = page.getByRole("menuitem", { name: /What it may do/ }).locator(".note")
+  await expect(reach).toContainText("reads ")
+  await expect(reach).toContainText("writes only to .tmp")
   // What each door does, under its name.
   await expect(page.getByRole("menuitem", { name: /Plan this/ }).locator(".note")).toHaveText("what was drafted, at the gate")
   await page.getByRole("menuitem", { name: /Plan this/ }).click()

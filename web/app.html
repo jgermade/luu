@@ -493,6 +493,31 @@
   // sandbox, disagreeing with the first at the one moment somebody is deciding.
   // Absent in a recording, whose settings are the ones it was replayed with.
   $: floor = state.settings?.floor || null
+  // The same facts in one line, for where no gate is up: the head's job menu,
+  // which is on screen for every turn of a draft. Most drafting turns happen
+  // with nothing proposed, and the gate was the only place that said what they
+  // may reach. A job says its plan instead, which is what holds its turns. See
+  // `RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md`.
+  const listed = (words, xs) => xs?.length ? `${words} ${xs.join(" · ")}` : null
+  const floorLine = f => !f ? null : [
+    `reads ${f.reads?.length ? f.reads.join(" · ") : "nothing"}`,
+    listed("runs", f.commands),
+    f.network ? "reaches the network" : null,
+    f.writes?.length ? `writes only to ${f.writes.join(" · ")}` : "writes nothing",
+  ].filter(Boolean).join(" · ") + (f.asks ? "; anything else is asked" : "")
+  const planLine = p => !p ? null : [
+    `reads ${p.files?.length ? p.files.join(" · ") : "nothing"}`,
+    listed("writes", p.writes),
+    listed("runs", p.commands),
+    // Asked and bounded by the session, as the gate says it: a plan asking
+    // for the network in a session with none reaches nothing.
+    p.network && state.settings?.posture?.network !== false ? "reaches the network" : null,
+  ].filter(Boolean).join(" · ")
+  $: reach = drafting ? floorLine(floor) : planLine(live?.plan)
+  const onJobMenu = value =>
+    value === "reach" ? openPermissions("policies")
+      : value === "plan" ? requestPlan()
+        : closeJob(live?.id)
   $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
     ? planTasks.length + proposed.plan.files.length + proposed.plan.commands.length
@@ -936,13 +961,14 @@
            were a row of their own over the composer until 2026-10-27. -->
       <span :if="live &amp;&amp; !proposed" class="job-menu">
         <Menu size="sm" variant="ghost" :label="drafting ? 'draft' : 'plan'"
-              :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}`"
+              :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}${reach ? ` — ${reach}` : ''}`"
               :disabled="replaying"
               :items="[
+                ...(reach ? [{ value: 'reach', label: 'What it may do', note: reach }, '-'] : []),
                 ...(drafting ? [{ value: 'plan', label: 'Plan this', note: 'what was drafted, at the gate', disabled: running }] : []),
                 { value: 'close', label: 'Close & fold', note: 'one summary from here on', disabled: running },
               ]"
-              @select="$event.detail === 'plan' ? requestPlan() : closeJob(live?.id)" />
+              @select="onJobMenu($event.detail)" />
       </span>
 
       <div class="acts">

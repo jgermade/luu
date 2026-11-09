@@ -157,6 +157,14 @@ asked of you first*. `writes` is on the wire since the floor has some, and it is
 the scratch and nothing more. See
 [`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
 
+**And so does the head, with no gate up.** Most drafting turns happen with
+nothing proposed, so the job menu beside the session's name opens on *What it
+may do*: the same floor in one line for a draft, the approved plan's reads,
+writes and commands for a job, and a click opens Permissions on its policies.
+The trigger's title carries the line too. Nothing new is resolved in the page:
+the floor is `settings.floor` and the plan is the job's own. See
+[`RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md`](RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md).
+
 **A write the floor refuses is asked about, once, where the policy file would
 allow it.** Refused and nothing else, a draft asked to create a file ended with a
 7B inventing workarounds and nobody asked anything: the person's door to the gate
