@@ -657,7 +657,13 @@ The model never executes anything directly — it only emits a structured reques
   [`the-alternation-that-was-not-one`](RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md),
   [`what-constrain-does`](RECORD/2026-09-14.what-constrain-does.completed.md)):
   7/15 clean calls against 3/15 unconstrained on the tool-call probe, and the
-  fence-continuation failure eliminated outright. `--constrain schema` sends
+  fence-continuation failure eliminated outright. **And a fence under a tool's own
+  name (`` ```read_file ``) is never completed** under the grammar: every
+  `` ```<tool> `` is avoided in the same automaton as the trigger
+  (Aho-Corasick, of which the one-trigger case is the KMP it was), its last
+  character not offered — forbidden, not forced toward a call, since the
+  drifted body lacks the name. Built, not yet measured on a server
+  ([`a-tool-s-own-fence-is-never-typed`](RECORD/2026-11-09.a-tool-s-own-fence-is-never-typed.completed.md)). `--constrain schema` sends
   `response_format`, forcing *every* reply into a call with no "just answer"
   branch at all — measured to exhaust `--max-tool-steps` on **15 of 15** probe
   prompts, because a model given a result from its own call and still not
