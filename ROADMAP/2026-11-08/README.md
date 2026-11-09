@@ -35,6 +35,17 @@ Narrowed and carried: 49, 50, 51 and 55. Carried, some with a line added: 1,
 names item 12 by number, and a number that moves between revisions is a link
 that lies.
 
+## Picking up, as of the end of 2026-11-09
+
+Built on `claude/admiring-sagan-k1wri6` since this revision was cut: rows 7,
+21, 43, 44, 45, 52, 54, 72(a)(b)(c) and 73 — each struck in place below, with
+its record. **Next, on a new branch and session: row 51.** Read
+[`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §*where 51
+stands* first: it lists what 51 touches and the one question to ask before
+building. After it, what is left without a machine is row 29; everything else
+waits on machine 3 (rows 36, 38 — now with `--fold-behind` arms — 39, 40, 41,
+42 and row 7's run), another machine, an account, a cluster or a decision.
+
 ## The calibration finding: the order said A, and the work went to I
 
 The last revision put Section A first: *why the first trial lost*, rows 36–41,
@@ -133,7 +144,7 @@ in *italics* are in
 | 48 | **A grant per host, once or for the session** | row 47 | *step 2's decisions*, 2 |
 | 49 | **The seam carries the outcome, not the policy**: `{ cmd, paths, network, limits }`, the files list as mounts, and a files `deny` held. *Narrowed*: the folder as the session's base was built 2026-10-30 ([`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) step 3) | nothing | *decided, and where every file lives* §2, §4 |
 | 50 | **The working directory stops deciding**: its `luu.toml` only with `--sandbox`, and `.luu/policy.toml` as a suggestion adopted with its hash. *Narrowed*: `[approvals]` moved to luu's config on 2026-10-30 ([`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) step 4) | nothing | *decided, and where every file lives* §3, §6 |
-| 51 | **Settings edits environments, and a refusal's *Add to the policy*.** Lists and the new session's dialog were done 2026-10-23. Environments have to be decided first: kept as saved trios of lists, or gone with the postures — *Decided 2026-11-09*: environments and postures go; what is left is *Add to the policy* — [`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §51 | a decision on environments | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
+| 51 | **Environments and postures go** (decided 2026-11-09, B), and a refusal's *Add to the policy*. *Not started; handed to a new branch and session.* What it touches, and the question to ask first — whether the server's own policy file goes too — are in [`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §*where 51 stands* | the server's own policy file: a question | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
 | ~~52~~ | ~~**Always: a grant for the project**~~ *Built 2026-11-09*: *Always in this project*, in luu's config by folder, listed and taken back in Settings → Policies — [`always-in-this-project`](../../RECORD/2026-11-09.always-in-this-project.completed.md) | ~~a decision~~ | *always is for later* |
 | 53 | **A yes that needs a signature** where `[approvals] required = true` | row 16 | [`a-refused-write-asks`](../../RECORD/2026-10-02.a-refused-write-asks.completed.md) §Still open |
 | ~~54~~ | ~~**The `--allow-*` flags add a second rule for a path, and the first answers**~~ *Done 2026-11-09*, in `Sandbox::new` rather than the flags: one root per path, the greater access. A plan with a file in both `files` and `writes` was read-only by the same defect — [`one-rule-per-path`](../../RECORD/2026-11-09.one-rule-per-path.completed.md) | ~~nothing~~ | *step 2a, built* |
