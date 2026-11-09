@@ -19,7 +19,7 @@ of its strikes.
 - Row 60, superseded by 65.
 - Row 61, decided: a remote server keeps its own configuration.
 - Row 14, **concurrency**. This one was never struck there. Steps 1–4 of
-  [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md)
+  [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md)
   built several live sessions, each with its own worker and folder, on
   2026-10-30, and the row sat in Section D still saying *needs a design
   argument*. It is struck there now, in place.
@@ -131,7 +131,7 @@ in *italics* are in
 | 46 | **What a yes to a command reaches**: whether the question offers the program without the writes | how often it is asked | *the proxy waits, and a command is granted whole* |
 | 47 | **The egress proxy, connected**: built and never started | nothing; postponed | *step 2's decisions*, 2 |
 | 48 | **A grant per host, once or for the session** | row 47 | *step 2's decisions*, 2 |
-| 49 | **The seam carries the outcome, not the policy**: `{ cmd, paths, network, limits }`, the files list as mounts, and a files `deny` held. *Narrowed*: the folder as the session's base was built 2026-10-30 ([`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md) step 3) | nothing | *decided, and where every file lives* §2, §4 |
+| 49 | **The seam carries the outcome, not the policy**: `{ cmd, paths, network, limits }`, the files list as mounts, and a files `deny` held. *Narrowed*: the folder as the session's base was built 2026-10-30 ([`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) step 3) | nothing | *decided, and where every file lives* §2, §4 |
 | 50 | **The working directory stops deciding**: its `luu.toml` only with `--sandbox`, and `.luu/policy.toml` as a suggestion adopted with its hash. *Narrowed*: `[approvals]` moved to luu's config on 2026-10-30 ([`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) step 4) | nothing | *decided, and where every file lives* §3, §6 |
 | 51 | **Settings edits environments, and a refusal's *Add to the policy*.** Lists and the new session's dialog were done 2026-10-23. Environments have to be decided first: kept as saved trios of lists, or gone with the postures | a decision on environments | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
 | 52 | **Always: a grant for the project**. Put off by decision | a decision | *always is for later* |
@@ -149,7 +149,7 @@ leftover, and it says which row it comes from.
 | 62 | **The `kubernetes` runtime on a cluster**: a session's pod next, after the certificate | a cluster | [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md); [`a-certificate-from-traefik`](../../RECORD/2026-11-04.a-certificate-from-traefik.completed.md) |
 | 63 | **A sweep of `Completed` worker pods** at luu's start | row 62 | [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md) |
 | 72 | **Links' leftovers**: (a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine on the model a linked request names; (c) `[host.*]` removed, which needs a decision first; (d) the links Service's LoadBalancer | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) |
-| 73 | **Sessions side by side, step 5**: before a session starts on a second local model, say what it will hold in memory. The record stays `WIP` until this is built | nothing | [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md) §4 |
+| ~~73~~ | ~~**Sessions side by side, step 5**: before a session starts on a second local model, say what it will hold in memory. The record stays `WIP` until this is built~~ *Done 2026-11-09*: the dialog names what is loaded, what this would load and the weights together — [`a-second-local-model-warned`](../../RECORD/2026-11-09.a-second-local-model-warned.completed.md) | ~~nothing~~ | [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) §4 |
 | 74 | **Proved on stand-ins, owed on the real thing**: a real authenticator's discoverable login (from 59; Chromium's virtual one would not answer it); the isolation run on the next release's own image layers (from 70); an admin's page clicked through (from 58) | an authenticator; a release | [`passkeys`](../../RECORD/2026-11-05.passkeys.completed.md), [`the-isolation-run-in-the-image`](../../RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md), [`roles-in-the-page`](../../RECORD/2026-11-05.roles-in-the-page.completed.md) |
 
 ~~**Asked and not answered**: what the person saw of the phone's three slides,
@@ -178,7 +178,7 @@ gantt
     Pre-alternation job read as draft (done) :done, prealt, after floor, 1d
     section F — the public luu
     Links leftovers a and b                :links, 2026-11-10, 2d
-    A second local model, warned           :mem, after links, 1d
+    A second local model, warned (done)    :done, mem, 2026-11-09, 1d
 ```
 
 Not on the chart: rows 1, 3, 4, 35 and 75 (a hand on a box), 71 and 74 (an account

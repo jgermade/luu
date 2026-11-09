@@ -3029,7 +3029,7 @@ stream would invent line orders and timings the session never had.
 **Resuming, and sessions side by side.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
 jobs, validated in `store_parity.rs`. **Since 2026-10-30 several sessions are live at
-once** ([`RECORD/2026-10-30.sessions-side-by-side.WIP.md`](RECORD/2026-10-30.sessions-side-by-side.WIP.md)): `App` holds a map of `LiveSession`s — each its own destination,
+once** ([`RECORD/2026-10-30.sessions-side-by-side.completed.md`](RECORD/2026-10-30.sessions-side-by-side.completed.md)): `App` holds a map of `LiveSession`s — each its own destination,
 agency (worker, container), grants, fold, stream and event channel — and which one was
 used most recently. `POST /api/sessions` makes one **beside** the others, built on
 `LiveSession::blank`, and makes it current; `POST /api/sessions/:id/resume` makes a stored
@@ -3049,7 +3049,13 @@ used idle one to sleep — checkpointed, its worker ended, out of the map, resum
 and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
 the current one, one with a client, a turn or a proposal never sleeps. `DELETE
 /api/sessions/:id/live` sleeps one on request; a live session cannot be deleted, and archiving
-one sleeps it first. Engines stop only when no live session sends to them. **Each works in its own folder**,
+one sleeps it first. Engines stop only when no live session sends to them, and **a second local
+model is said before the click**: the new session's dialog asks `GET /api/engines/beside` what
+the chosen provider and model would load and what the engines already hold, and names both with
+their weights' size on disk and the total — or, where the same engine holds another model for a
+live session, that every turn of either reloads it
+([`RECORD/2026-11-09.a-second-local-model-warned.completed.md`](RECORD/2026-11-09.a-second-local-model-warned.completed.md)).
+**Each works in its own folder**,
 chosen under where `serve` was started (`folder` on `POST /api/sessions`, root-relative, never
 above the root): it is the base of its sandbox, so its tree, its git panel (status paths made
 the folder's with `git rev-parse --show-prefix`), its repository map and its selection walk are

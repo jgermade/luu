@@ -408,7 +408,7 @@ impl Destination {
 /// One live session's state: what `App` held for *the* session until
 /// 2026-10-30, moved here whole so that several can live side by side. Step 1
 /// keeps exactly one, in [`App::live`]; see
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 struct LiveSession {
     /// The live session's destination. See [`Destination`].
     destination: RwLock<Arc<Destination>>,
@@ -502,7 +502,7 @@ impl LiveSession {
     /// `agency`: what a new session and a resume fill in, field by field, before
     /// it is made live beside the others. The record file, where `--record`
     /// named one, is the process's and shared. See
-    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    /// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     fn blank(
         destination: Arc<Destination>,
         agency: Arc<Agency>,
@@ -557,7 +557,7 @@ impl LiveSession {
 
 /// The live sessions, by id, and the one used most recently: what a route or
 /// a socket that names none means. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 struct Lives {
     map: std::collections::BTreeMap<String, Arc<LiveSession>>,
     /// The current one **per owner**: `None` is the only key where there are
@@ -659,7 +659,7 @@ struct App {
     map_fill: agent_core::repo_map::Fill,
     /// The directory `serve` was started in: what every session's folder is
     /// chosen under, and what the page's paths are relative to. See
-    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     root: PathBuf,
     /// Tokens of selected fragments per turn. 0 is off.
     select_tokens: u32,
@@ -861,7 +861,7 @@ pub struct Settings {
     #[serde(default)]
     root: String,
     /// This session's folder, relative to `root`: `""` is the root itself.
-    /// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     #[serde(default)]
     folder: String,
     /// The other live sessions working in the same folder, by id: two agents
@@ -2270,6 +2270,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engine", get(live_engine))
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/port", get(free_engine_port))
+        .route("/api/engines/beside", get(engines_beside))
         .route("/api/engines/{name}/uninstall", post(uninstall_engine))
         .route("/api/engines/{name}/rename", post(rename_engine))
         .route("/api/engines/{name}/chat", post(chat_engine))
@@ -3276,7 +3277,7 @@ fn sees_stored(who: &Option<Who>, owner: &Option<String>) -> bool {
 /// than the current one — one parameter, the same one `/ws` takes, rather than
 /// every route written twice. A session that is not live is a 404. A host's
 /// routes (`/h/<name>/…`) are that host's to answer, and pass through. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §2.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §2.
 ///
 /// **And on a server with users, nobody reaches another user's session**: a
 /// session named in the path (`/api/sessions/<id>/…`) or by `?session=` that
@@ -4021,7 +4022,7 @@ static SOCKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 /// `/ws?session=<id>`: which live session a socket speaks for. With none, it
 /// follows the current one. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 #[derive(serde::Deserialize, Default)]
 struct SocketFor {
     session: Option<String>,
@@ -8605,6 +8606,118 @@ struct Offered {
 
 /// Whether `name` is offered: a profile, not withheld with `offer = false`,
 /// and not one whose engine is switched off.
+#[derive(serde::Deserialize)]
+struct BesideAsk {
+    provider: String,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// One engine and the model it holds, or would.
+#[derive(serde::Serialize, Debug, PartialEq)]
+struct EngineModel {
+    engine: String,
+    /// The reference it loads; `None` for an engine started on its own
+    /// table's model, or for Ollama, which serves every model it has.
+    model: Option<String>,
+    /// `name (source)`, as the pickers say it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    /// The weights on disk, in bytes: what loading it puts in memory, give or
+    /// take the context. `None` where the file is not one this machine lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    /// Live sessions sending to this engine. Zero for `loads`.
+    sessions: usize,
+}
+
+/// What a new session on `provider`/`model` would load, and what this server's
+/// engines already hold — asked by the new session's dialog before the click,
+/// so a second local model is a decision and not a surprise. Sizes are the
+/// weights' files, not a measurement of the process: an engine's resident
+/// memory depends on the platform and the card, and the file is the number a
+/// person can compare. See `RECORD/2026-11-09.a-second-local-model-warned.completed.md`.
+async fn engines_beside(
+    State(state): State<AppRouterState>,
+    Query(ask): Query<BesideAsk>,
+) -> Response {
+    let (config, path) = match load_config().await {
+        Ok(loaded) => loaded,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if !is_offered(&config, &ask.provider) {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("no provider named {} is offered here", ask.provider),
+        )
+            .into_response();
+    }
+    let model = ask.model.as_deref().filter(|m| !m.trim().is_empty());
+    let resolved = match crate::provider::resolve(
+        &config,
+        path.as_deref(),
+        crate::provider::Flags {
+            provider: Some(&ask.provider),
+            model,
+            ..Default::default()
+        },
+    ) {
+        Ok(resolved) => resolved,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let loads = crate::engines::for_run(&resolved).map(|(name, engine)| (name, engine.model));
+
+    // Who sends where, by the engine of each live session's profile.
+    let mut sending: std::collections::BTreeMap<String, usize> = Default::default();
+    for (_, live) in state.app.all_live() {
+        let profile = live.destination().await.settings.profile.clone();
+        if let Some(engine) =
+            profile.and_then(|profile| config.profiles().get(&profile)?.engine.clone())
+        {
+            *sending.entry(engine).or_default() += 1;
+        }
+    }
+    let mut loaded = Vec::new();
+    for name in config.engines().keys() {
+        if let Some(model) = state.app.engines.model_of(name).await {
+            loaded.push((name.clone(), model));
+        }
+    }
+
+    // One walk of the catalog for every reference, off the async threads.
+    let described = tokio::task::spawn_blocking(move || {
+        let catalog = crate::models::catalog();
+        let describe = |engine: String, model: Option<String>, sessions: usize| {
+            let found = model
+                .as_deref()
+                .and_then(|m| catalog.iter().find(|local| local.reference == m));
+            EngineModel {
+                label: model.as_deref().map(crate::models::label),
+                size: found.map(|local| local.size).filter(|size| *size > 0),
+                engine,
+                model,
+                sessions,
+            }
+        };
+        let loads = loads.map(|(engine, model)| describe(engine, model, 0));
+        let loaded: Vec<EngineModel> = loaded
+            .into_iter()
+            .map(|(engine, model)| {
+                let sessions = sending.get(&engine).copied().unwrap_or(0);
+                describe(engine, model, sessions)
+            })
+            .collect();
+        (loads, loaded)
+    })
+    .await;
+    match described {
+        Ok((loads, loaded)) => {
+            Json(serde_json::json!({ "loads": loads, "loaded": loaded })).into_response()
+        }
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 fn is_offered(config: &crate::provider::Config, name: &str) -> bool {
     let Some(profile) = config.profiles().get(name) else {
         return false;
@@ -10827,7 +10940,7 @@ fn learn_window(app: Arc<App>, live: Arc<LiveSession>) {
 /// send to — so a session that moved elsewhere does not leave a model loaded
 /// in memory until `serve` exits, and one beside it keeps the model it uses.
 /// See [`crate::engines::Supervisor::stop_others`] and
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §4.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §4.
 async fn release_engines(app: &App, profile: Option<&str>) {
     let config = load_config().await.ok().map(|(config, _)| config);
     let mut profiles: Vec<String> = profile.map(str::to_string).into_iter().collect();
@@ -11320,7 +11433,7 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     };
     // The current one first, as `live`, which is what the page has always
     // read the live row as; the others live beside it under their own ids
-    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    // (`RECORD/2026-10-30.sessions-side-by-side.completed.md`).
     let (mut first, last, current_id) = row_of(&current).await;
     first.written_at = written(&current_id, last, first.started_at);
     if let Some(live) = first.live.as_mut() {
@@ -11409,7 +11522,7 @@ struct NewSession {
     lists: Option<ListsChoice>,
     /// The folder the session works in, relative to where `serve` was
     /// started: its sandbox's base. Absent, or `""`, is that directory itself.
-    /// Never above it. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// Never above it. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     #[serde(default)]
     folder: Option<String>,
 }
@@ -12269,7 +12382,7 @@ async fn new_session(
     let app = &state.app;
     // Beside the others, not in place of the current one: a turn running in
     // it goes on. Refused only when there is no room for one more. See
-    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    // `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     room_for_one(app).await?;
     // The session it is made beside, whose destination it starts from: the
     // asker's current one, or — for a user's first — the server's own.
@@ -12657,7 +12770,7 @@ struct MoveFolder {
 /// made again over that tree — the same lists or posture, the same runtime —
 /// with its repository map and selection walk. After its first turn its
 /// history is about the tree it worked in, and another folder is another
-/// session. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+/// session. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
 async fn put_session_folder(
     State(state): State<AppRouterState>,
     Json(asked): Json<MoveFolder>,
@@ -12727,7 +12840,7 @@ async fn put_session_folder(
 /// ones that are. Where there is no room, the least recently used one that
 /// may sleep is put to sleep to make some; refused only when none may, with
 /// the ids of the live ones. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §3.
 async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
     let max = load_config()
         .await
@@ -13293,7 +13406,7 @@ async fn resume_session(
     // Already live — beside the current one, or asleep in nobody's way — is
     // attached to rather than resumed: it becomes the current one, as it is,
     // with whatever it is running. See
-    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    // `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     //
     // **Unless the body names somewhere else for it to send.** That is the
     // model picker's switch and the sessions dialog's *Continue here*, and

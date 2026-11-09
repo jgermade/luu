@@ -747,7 +747,7 @@ pub struct Sessions {
     pub auto_name: bool,
     /// How many sessions may be live at once, each with its agency, its
     /// worker and its container. One more is refused, naming the ones that
-    /// are. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
+    /// are. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §3.
     #[serde(default = "max_live")]
     pub max_live: usize,
     /// How long a live session nobody uses — no turn, no proposal waiting, no

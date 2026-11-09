@@ -1874,7 +1874,7 @@ fn run_token(path: &std::path::Path, if_missing: bool) -> Result<()> {
 pub(crate) struct SandboxArgs {
     /// The folder a session works in, where `serve` built it for one: the
     /// sandbox's base instead of the directory the command ran in. Never a
-    /// flag. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// flag. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     #[arg(skip)]
     pub(crate) folder: Option<std::path::PathBuf>,
     /// Sandbox policy (TOML). Defaults to ./luu.toml when it is there.

@@ -128,7 +128,7 @@ export const state = $reactive({
   sessions: [],           // live server sessions list: [{ id, title, turns, live?, ... }]
   // Live sessions not on screen that want a look, by id: `"gate"` while one
   // waits for a person, `"done"` once a turn ended there, until it is opened.
-  // See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §6.
+  // See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §6.
   attention: {},
   currentSessionId: "live",
 })

@@ -1112,7 +1112,7 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
  * session with no turns yet moves into it and its sandbox's base is that
  * folder, rather than the page narrowing what it lists. See
  * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
- * `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+ * `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
  */
 test("the workspace can be narrowed to a subdirectory of where serve started", async ({ page }) => {
   const errors = []

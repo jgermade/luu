@@ -234,7 +234,7 @@ use crate::trace::TraceMessage;
 /// **27: the posture names its `folder`** — the session's folder, the base of
 /// its sandbox, as an absolute path — which a resume makes the session again
 /// in, and which `same_place` compares where both runs say. Absent before it.
-/// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+/// See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
 pub const FORMAT: u32 = 27;
 
 /// The posture a session ran under, as a recording names it.

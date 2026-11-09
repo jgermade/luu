@@ -632,7 +632,7 @@ pub struct SessionSummary {
     pub archived_at: Option<u64>,
     /// Where it is live in `serve`, how it is: `None` for a session that is
     /// only stored — never opened since a restart, or put to sleep. See
-    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    /// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live: Option<Liveness>,
 }

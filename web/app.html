@@ -402,7 +402,7 @@
 
   // The session on screen works in its own folder; when another one comes on
   // screen — a new session, a resume, another tab's switch — the panels follow
-  // its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+  // its folder. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
   $: if (loaded && state.settings?.base && state.settings.base !== workspace.base) followFolder(state.settings)
 
   // Live sessions not on screen that finished a turn or wait at their gate:
