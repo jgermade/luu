@@ -58,6 +58,11 @@ pub enum Answer {
     /// it is taken back: they are refused without asking. Remembering it is the
     /// asker's, as with [`Self::Session`].
     Forbid,
+    /// Yes to this call, and to every one like it in this project's drafts —
+    /// every session in its folder — until it is taken back. Written where a
+    /// person reads it, by the asker. See
+    /// `RECORD/2026-11-09.five-decisions.WIP.md` §52.
+    Project,
 }
 
 /// Somebody who can answer for one call the floor refused.
@@ -96,9 +101,10 @@ pub fn unheld(call: &ToolCall, sandbox: &Sandbox) -> Option<String> {
 pub enum Escalation {
     /// Nothing: the refusal is the answer, and nobody is asked.
     Refused,
-    /// A person already allowed it for the session: it runs under this, and
-    /// nobody is asked again.
-    Granted(Sandbox),
+    /// A person already allowed it — for the session, or always in this
+    /// project: it runs under this, and nobody is asked again. The scope is
+    /// what the step reports.
+    Granted(Sandbox, crate::protocol::GrantScope),
     /// A person may allow it: a yes runs it under this.
     Ask(Sandbox),
     /// A person already refused it for the session: refused with
@@ -551,10 +557,10 @@ pub async fn run_agent_turn(
                 Some(ask) if !result.verdict.allowed => ask.ceiling.escalate(&call, sandbox),
                 _ => Escalation::Refused,
             };
-            if let Escalation::Granted(wider) = &escalation {
+            if let Escalation::Granted(wider, scope) = &escalation {
                 started = std::time::Instant::now();
                 result = run_call(tools, &call, wider, &limits).await;
-                grant = Some(crate::protocol::GrantScope::Session);
+                grant = Some(*scope);
             }
             if let Escalation::Forbidden = &escalation {
                 result = ToolOutcome::denied(Verdict::deny(PERSON_FORBADE));
@@ -568,7 +574,7 @@ pub async fn run_agent_turn(
                     _ = cancelled.wait_for(|cancelled| *cancelled) => None,
                 };
                 match answer {
-                    Some(yes @ (Answer::Once | Answer::Session)) => {
+                    Some(yes @ (Answer::Once | Answer::Session | Answer::Project)) => {
                         // The clock is the call's, not the wait's: a person who
                         // took a minute to read it did not make the tool slow.
                         started = std::time::Instant::now();
@@ -576,6 +582,7 @@ pub async fn run_agent_turn(
                         asked = Some(true);
                         grant = Some(match yes {
                             Answer::Session => crate::protocol::GrantScope::Session,
+                            Answer::Project => crate::protocol::GrantScope::Project,
                             _ => crate::protocol::GrantScope::Once,
                         });
                     }
@@ -1710,7 +1717,7 @@ mod tests {
 
     impl Ceiling for AlreadyGranted {
         fn escalate(&self, _call: &ToolCall, _refused_under: &Sandbox) -> Escalation {
-            Escalation::Granted(self.0.clone())
+            Escalation::Granted(self.0.clone(), crate::protocol::GrantScope::Session)
         }
     }
 

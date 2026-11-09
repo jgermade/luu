@@ -18,8 +18,8 @@ import { $reactive, C79 } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 13
-const FORMAT = 28
+const PROTOCOL = 14
+const FORMAT = 29
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -1053,9 +1053,13 @@ export const approveTask = approveJob
 /// them without asking, until it is taken back. `turn`, `step` and `index`
 /// name the call, so an answer that raced the end of its turn is refused rather
 /// than applied to whatever is held next.
-export function answerCall(turn, step, index, allow, session = false) {
+export function answerCall(turn, step, index, allow, session = false, project = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   const answer = { type: "answer_call", turn, step, allow, session }
+  // Always in this project (protocol 14): a yes written to luu's config for
+  // this folder. Only sent when it is one, so an older server is not asked a
+  // field it would ignore.
+  if (project && allow) answer.project = true
   if (index > 1) answer.index = index
   socket.send(JSON.stringify(answer))
 }

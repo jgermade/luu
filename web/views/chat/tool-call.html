@@ -59,6 +59,14 @@
     sent = key
     answerCall(held.turn, held.step, held.index ?? 1, allow, session)
   }
+  // *Always in this project*: a yes for every session in this folder, written
+  // to luu's config where Settings → Policies lists it and takes it back. A
+  // yes only — a lasting no is the session's. Row 52.
+  const always = () => {
+    if (!held || answered) return
+    sent = key
+    answerCall(held.turn, held.step, held.index ?? 1, true, false, true)
+  }
   // A command asked about is a program the shell list leaves to a person; a
   // yes runs it with what the session may write and reach.
   $: asksCommand = part?.name === "run_command"
@@ -80,7 +88,9 @@
               ? { word: call.command.exit_code === null ? "killed" : `exit ${call.command.exit_code}`, kind: "bad" }
               : call.grant === "session"
                 ? { word: call.asked ? "allowed for the session" : "allowed earlier", kind: "ok" }
-                : { word: call.asked ? "allowed once" : "done", kind: "ok" }
+                : call.grant === "project"
+                  ? { word: call.asked ? "allowed in this project" : "allowed in this project, earlier", kind: "ok" }
+                  : { word: call.asked ? "allowed once" : "done", kind: "ok" }
   $: took = call?.duration_ms != null ? `${call.duration_ms} ms` : ""
   // **Collapsed until clicked**: the head line and nothing under it. What
   // came back used to show its first three lines under the card, and a run
@@ -121,6 +131,8 @@
     <div class="answers">
       <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow</button>
       <button type="button" :disabled="answered" @click="answer(false)">Deny</button>
+      <button type="button" class="always" :disabled="answered" title="Every session in this folder, until it is taken back in Settings → Policies"
+              @click="always()">Always in this project</button>
       <span class="session"><Checkbox :model="session" label="Apply to session" :disabled="answered" /></span>
     </div>
   </div>
@@ -128,8 +140,9 @@
   <div :if="open" class="body">
     <div :if="call?.verdict" class="line">
       <span :class="call.verdict.allowed ? 'ok' : 'bad'">{{ call.verdict.allowed ? "allowed" : "denied" }}</span>
-      <span :if="call.asked != null &amp;&amp; call.grant !== 'session'" class="dim">by you, for this call</span>
+      <span :if="call.asked != null &amp;&amp; call.grant !== 'session' &amp;&amp; call.grant !== 'project'" class="dim">by you, for this call</span>
       <span :if="call.grant === 'session'" class="dim">by you, for the session</span>
+      <span :if="call.grant === 'project'" class="dim">by you, always in this project</span>
       <span class="dim">— {{ call.verdict.rule }}</span>
     </div>
     <div :if="call?.error" class="line bad">{{ call.error }}</div>

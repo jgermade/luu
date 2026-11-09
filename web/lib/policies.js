@@ -30,3 +30,23 @@ export async function savePolicies(tables) {
   if (result.ok) await loadPostures()
   return result
 }
+
+/// What was allowed *always in this project*, by folder: `{ projects: {
+/// "<folder>": { commands, writes } }, editable }`. Row 52; see
+/// `RECORD/2026-11-09.always-in-this-project.completed.md`.
+export async function loadProjectGrants() {
+  const res = await fetch("./api/grants/project", { headers: apiHeaders() })
+  if (!res.ok) return { ok: false, error: (await res.text()) || `${res.status}` }
+  return { ok: true, view: await res.json() }
+}
+
+/// Takes one back: the next call it covered in that folder is asked again.
+export async function removeProjectGrant(folder, kind, target) {
+  const res = await fetch("./api/grants/project/remove", {
+    method: "POST",
+    headers: { ...apiHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ folder, kind, target }),
+  })
+  if (!res.ok) return { ok: false, error: (await res.text()) || `${res.status}` }
+  return { ok: true, view: await res.json() }
+}

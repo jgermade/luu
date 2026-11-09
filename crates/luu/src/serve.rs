@@ -239,6 +239,16 @@ impl agent_core::agent::Asker for Watching {
                 agent_core::agent::Answer::Forbid => Some(false),
                 _ => None,
             };
+            // Always in this project: written to luu's config for this
+            // folder, where Settings lists it and a person takes it back. A
+            // write that fails is said on stderr and the yes still runs this
+            // call — it is a yes either way, and the next turn asks again.
+            if answer == agent_core::agent::Answer::Project
+                && let Some(grant) = crate::grants::grant_for(call, &self.base)
+                && let Err(error) = write_project_grant(&self.base, &grant, true).await
+            {
+                eprintln!("always in this project: not written: {error}");
+            }
             if let Some(allow) = lasting
                 && let Some(grant) = crate::grants::grant_for(call, &self.base)
             {
@@ -273,6 +283,41 @@ impl agent_core::agent::Asker for Watching {
             answer
         })
     }
+}
+
+/// What `[project."<folder>"]` allows always, for the session folder `base`.
+/// Read fresh when a turn begins: a grant taken back in Settings holds from
+/// the next turn. A file that will not load allows nothing more.
+async fn project_grants(
+    base: &std::path::Path,
+) -> std::collections::BTreeSet<agent_core::protocol::Grant> {
+    load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.projects().get(&base.display().to_string()).cloned())
+        .map(|grants| grants.grants())
+        .unwrap_or_default()
+}
+
+/// Writes one grant into `[project."<folder>"]`, or takes it out.
+async fn write_project_grant(
+    base: &std::path::Path,
+    grant: &agent_core::protocol::Grant,
+    allow: bool,
+) -> Result<(), String> {
+    let path = config_path()
+        .await
+        .ok_or("this machine has no state directory to write config.toml in")?;
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    write_config(
+        current.with_project_grant(&base.display().to_string(), grant, allow),
+        path,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// A prompt held between the proposal and the answer to it.
@@ -2131,6 +2176,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/tool-steps", axum::routing::put(put_tool_steps))
         .route("/api/policies", get(get_policies).put(put_policies))
+        .route("/api/grants/project", get(get_project_grants))
+        .route("/api/grants/project/remove", post(remove_project_grant))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
         .route("/api/providers/where", get(provider_where))
@@ -4397,12 +4444,16 @@ async fn handle_client_message(app: &Arc<App>, live: &Arc<LiveSession>, message:
             index,
             allow,
             session,
+            project,
         } => {
-            let answer = match (allow, session) {
-                (false, false) => agent_core::agent::Answer::Deny,
-                (false, true) => agent_core::agent::Answer::Forbid,
-                (true, false) => agent_core::agent::Answer::Once,
-                (true, true) => agent_core::agent::Answer::Session,
+            let answer = match (allow, session, project) {
+                (false, false, _) => agent_core::agent::Answer::Deny,
+                (false, true, _) => agent_core::agent::Answer::Forbid,
+                // Always in this project is a yes and only a yes: a lasting
+                // no is the session's, and a project-wide one is a list.
+                (true, _, true) => agent_core::agent::Answer::Project,
+                (true, false, false) => agent_core::agent::Answer::Once,
+                (true, true, false) => agent_core::agent::Answer::Session,
             };
             let index = index.unwrap_or(1);
             let held = {
@@ -5793,14 +5844,15 @@ async fn start_turn(app: Arc<App>, live: Arc<LiveSession>, prompt: String) {
     // And since 2026-10-23, a command the shell list leaves to a person, and
     // whatever a person already allowed for the session. See `crate::grants`.
     let wider = match sandbox.authority() {
-        Authority::Draft(draft) if !app.approvers.required => {
-            Some(crate::grants::DraftCeiling::new(
+        Authority::Draft(draft) if !app.approvers.required => Some(
+            crate::grants::DraftCeiling::new(
                 &agency.sandbox,
                 agency.environment(),
                 live.grants.clone(),
                 Authority::Person(*draft),
-            ))
-        }
+            )
+            .with_project(project_grants(agency.sandbox.base()).await),
+        ),
         _ => None,
     };
 
@@ -10787,6 +10839,57 @@ async fn get_policies(State(state): State<AppRouterState>) -> Response {
 /// The environments are resolved again from what was written, so the next
 /// session on one runs under the lists as they are now; the live session
 /// keeps the agency it was built with.
+/// What was allowed always, by project folder, and whether this page may take
+/// one back — the policies' own rule, since a grant is a policy a person wrote
+/// by answering.
+async fn get_project_grants(State(state): State<AppRouterState>) -> Response {
+    let projects = load_config()
+        .await
+        .map(|(config, _)| config.projects().clone())
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "projects": projects,
+        "editable": may_write(&state, Role::Admin),
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectGrantRemoval {
+    folder: String,
+    kind: agent_core::protocol::GrantKind,
+    target: String,
+}
+
+/// Takes one *always in this project* back: the next call it covered in that
+/// folder is asked again.
+async fn remove_project_grant(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<ProjectGrantRemoval>,
+) -> Response {
+    if !may_write(&state, Role::Admin) {
+        return (
+            StatusCode::FORBIDDEN,
+            refusal(
+                &state,
+                Role::Admin,
+                "a project's grants are read-only on a server bound off loopback",
+            ),
+        )
+            .into_response();
+    }
+    let grant = agent_core::protocol::Grant {
+        kind: asked.kind,
+        target: asked.target,
+    };
+    if let Err(error) =
+        write_project_grant(std::path::Path::new(&asked.folder), &grant, false).await
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    get_project_grants(State(state)).await
+}
+
 async fn put_policies(
     State(state): State<AppRouterState>,
     Json(edit): Json<PoliciesTables>,

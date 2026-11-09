@@ -515,6 +515,10 @@ struct File {
     /// `[peer.<name>]`: another luu this one links to, by key. See [`Peer`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     peer: BTreeMap<String, Peer>,
+    /// `[project."<folder>"]`: what a person allowed *always in this project*,
+    /// by the session folder's absolute path. See [`ProjectGrants`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    project: BTreeMap<String, ProjectGrants>,
 }
 
 /// `[server]`: how `luu serve` is reached, written down rather than typed on
@@ -629,6 +633,43 @@ pub fn is_origin(origin: &str) -> bool {
         return false;
     };
     matches!(scheme, "http" | "https") && !rest.is_empty() && !rest.contains(['/', '?', '#', ' '])
+}
+
+/// `[project."<folder>"]`: what a person allowed **always in this project** —
+/// every draft of every session in that folder — answering a held call.
+///
+/// In luu's own config and never in the project's tree, so a repository
+/// cannot grant itself anything; keyed by the folder's absolute path, so
+/// allowing `npm` in one project allows it in no other. Only ever an `ask`
+/// turned into an allow: a list's `deny` is never asked, so never reaches
+/// here. See `RECORD/2026-11-09.always-in-this-project.completed.md`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ProjectGrants {
+    /// Programs `run_command` may run, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+    /// Paths the file tools may write, relative to the folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
+}
+
+impl ProjectGrants {
+    /// As the grants a session's answers are made of.
+    pub fn grants(&self) -> std::collections::BTreeSet<agent_core::protocol::Grant> {
+        use agent_core::protocol::{Grant, GrantKind};
+        self.commands
+            .iter()
+            .map(|target| Grant {
+                kind: GrantKind::Command,
+                target: target.clone(),
+            })
+            .chain(self.writes.iter().map(|target| Grant {
+                kind: GrantKind::Write,
+                target: target.clone(),
+            }))
+            .collect()
+    }
 }
 
 /// `[peer.<name>]`: another luu this one links to, by key. Written by `luu
@@ -991,6 +1032,7 @@ pub struct Config {
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
     peers: BTreeMap<String, Peer>,
+    projects: BTreeMap<String, ProjectGrants>,
     server: Option<Server>,
     auth: Option<AuthTable>,
 }
@@ -1129,6 +1171,7 @@ impl Config {
             authority: file.authority,
             engines: file.engine,
             peers: file.peer,
+            projects: file.project,
             server: file.server,
             auth: file.auth,
         };
@@ -1464,6 +1507,7 @@ impl Config {
             authority: self.authority.clone(),
             engine: self.engines.clone(),
             peer: self.peers.clone(),
+            project: self.projects.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
         })
@@ -1551,6 +1595,7 @@ impl Config {
             authority: self.authority.clone(),
             engines: self.engines.clone(),
             peers: self.peers.clone(),
+            projects: self.projects.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
         }
@@ -1663,6 +1708,39 @@ impl Config {
     pub fn with_peers(&self, peers: BTreeMap<String, Peer>) -> Self {
         Self {
             peers,
+            ..self.clone()
+        }
+    }
+
+    /// What was allowed always, by project folder.
+    pub fn projects(&self) -> &BTreeMap<String, ProjectGrants> {
+        &self.projects
+    }
+
+    /// The same file with `grant` allowed always in `folder`, or taken back
+    /// (`allow = false`). A folder left with nothing is written as no table.
+    pub fn with_project_grant(
+        &self,
+        folder: &str,
+        grant: &agent_core::protocol::Grant,
+        allow: bool,
+    ) -> Self {
+        let mut projects = self.projects.clone();
+        let entry = projects.entry(folder.to_string()).or_default();
+        let list = match grant.kind {
+            agent_core::protocol::GrantKind::Command => &mut entry.commands,
+            agent_core::protocol::GrantKind::Write => &mut entry.writes,
+        };
+        list.retain(|target| *target != grant.target);
+        if allow {
+            list.push(grant.target.clone());
+            list.sort();
+        }
+        if entry.commands.is_empty() && entry.writes.is_empty() {
+            projects.remove(folder);
+        }
+        Self {
+            projects,
             ..self.clone()
         }
     }
@@ -2155,6 +2233,35 @@ mod tests {
 
     fn config(text: &str) -> Result<Config, ConfigError> {
         Config::from_toml(text, PATH)
+    }
+
+    /// Row 52: a grant for a project is written by folder, read back the
+    /// same, and taking the last one back writes no table.
+    #[test]
+    fn a_project_grant_is_written_by_folder_and_taken_back() {
+        use agent_core::protocol::{Grant, GrantKind};
+        let npm = Grant {
+            kind: GrantKind::Command,
+            target: "npm".into(),
+        };
+        let lock = Grant {
+            kind: GrantKind::Write,
+            target: "package-lock.json".into(),
+        };
+        let written = Config::default()
+            .with_project_grant("/home/me/web", &npm, true)
+            .with_project_grant("/home/me/web", &lock, true)
+            .with_project_grant("/home/me/web", &npm, true);
+        let text = written.render().unwrap();
+        assert!(text.contains("[project.\"/home/me/web\"]"), "{text}");
+        let again = Config::from_toml(&text, "config.toml").unwrap();
+        let grants = again.projects()["/home/me/web"].grants();
+        assert_eq!(grants.len(), 2, "npm once, however often it is allowed");
+        let gone = again
+            .with_project_grant("/home/me/web", &npm, false)
+            .with_project_grant("/home/me/web", &lock, false);
+        assert!(gone.projects().is_empty());
+        assert!(!gone.render().unwrap().contains("[project"));
     }
 
     /// `[host.*]` was removed with no compatibility (2026-11-09): a file that

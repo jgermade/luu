@@ -122,7 +122,11 @@ use crate::turn::{EndReason, TurnEvent};
 /// a thing that happened to the conversation, on the protocol for
 /// [`ServerMessage::Evicted`]'s reason. See
 /// `RECORD/2026-11-09.fold-behind.completed.md`.
-pub const VERSION: u32 = 13;
+///
+/// **14 is a yes for the project**: [`GrantScope::Project`] on a step, and
+/// [`ClientMessage::AnswerCall`]'s `project`. A new variant of a tagged enum,
+/// the rule 2 named. See `RECORD/2026-11-09.always-in-this-project.completed.md`.
+pub const VERSION: u32 = 14;
 
 /// What a person answered when a turn had made every tool call its budget
 /// allows and the model asked for another.
@@ -146,6 +150,10 @@ pub enum GrantScope {
     Once,
     /// Every draft of this session, until it is taken back.
     Session,
+    /// Every draft of every session in this project's folder, until it is
+    /// taken back: written in luu's own config, never in the project's tree.
+    /// Protocol 14.
+    Project,
 }
 
 /// What a session's answer is about: a program `run_command` runs, or a path
@@ -312,6 +320,12 @@ pub enum ClientMessage {
         /// once, which is what every answer before protocol 10 meant.
         #[serde(default)]
         session: bool,
+        /// With `allow`: always in this project, written to luu's config for
+        /// the session's folder (protocol 14). Never a no: a lasting no is the
+        /// session's, and a project-wide one would be a list, which Settings
+        /// edits.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        project: bool,
     },
     /// The answer to a [`ServerMessage::LimitReached`]. `turn`, `step` and
     /// `index` name the call that found the budget spent, so an answer that

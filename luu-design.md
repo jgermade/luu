@@ -210,6 +210,17 @@ be signed. At the gate, a plan on a session built from lists may get whatever th
 since approving it is that person's yes, for the job; a policy file stays the outer bound. `protocol::VERSION`
 11, `record::FORMAT` 23. See
 [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+**And since 2026-11-09 a yes may be for the project**: a third button, *Always in this
+project*, writes the grant to luu's own `config.toml` as `[project."<folder>"] commands = […]`
+or `writes = […]`, keyed by the session folder's absolute path — never in the project's tree,
+so a repository grants itself nothing, and allowing `npm` in one folder allows it in no other.
+Every draft of every session in that folder runs it without asking; the ceiling reads the
+table when a turn begins and asks it after the session's own answers, so a session's no still
+refuses what the project allows, and a list's `deny` is never asked so never reaches it. A step
+reports `grant: "project"` (*allowed in this project*), and Settings → Policies lists every
+folder's grants under *Always, by project*, each with a × (`POST /api/grants/project/remove`).
+A yes only: a lasting no is the session's. `protocol::VERSION` 14, `record::FORMAT` 29. See
+[`RECORD/2026-11-09.always-in-this-project.completed.md`](RECORD/2026-11-09.always-in-this-project.completed.md).
 **A person's yes runs what the kernel here cannot hold** (since 2026-10-27): off Linux there is
 no Landlock and no seccomp, and under `enforcement = "kernel"` every command a draft makes was
 refused — after the yes as before it. The ceiling now gives the yes `best-effort` where the

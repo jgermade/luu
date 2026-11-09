@@ -240,7 +240,11 @@ use crate::trace::TraceMessage;
 /// resend rules, and a `compacted` protocol line says when it moved
 /// (`protocol::VERSION` 13). Absent before it, which was `never`. See
 /// `RECORD/2026-11-09.fold-behind.completed.md`.
-pub const FORMAT: u32 = 28;
+///
+/// **29: a step's `grant` may be `project`** — allowed always in this
+/// project (`protocol::VERSION` 14). See
+/// `RECORD/2026-11-09.always-in-this-project.completed.md`.
+pub const FORMAT: u32 = 29;
 
 /// The posture a session ran under, as a recording names it.
 ///
