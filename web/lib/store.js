@@ -18,8 +18,8 @@ import { $reactive, C79 } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 12
-const FORMAT = 27
+const PROTOCOL = 13
+const FORMAT = 28
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -460,6 +460,20 @@ function onProtocol(message) {
       // written again.
       const id = message.job ?? message.task
       patchJob(id, { state: "open", summary: null, closedBy: null, replaced: null })
+      break
+    }
+
+    // What was folded behind to keep the window: the turns are kept and
+    // marked, as an eviction's are, and the turn that folded says what it
+    // saved — the line that makes a full window something a person is told.
+    // See `RECORD/2026-11-09.fold-behind.completed.md`.
+    case "compacted": {
+      const folded = new Set(message.turns)
+      const report = { turns: message.turns, tokens: message.tokens, summaryTokens: message.summary_tokens }
+      state.messages = state.messages.map(m =>
+        folded.has(m.turn) ? { ...m, compacted: message.turn }
+          : m.turn === message.turn && m.role === "user" ? { ...m, folding: report }
+            : m)
       break
     }
 
@@ -1410,6 +1424,10 @@ export async function refreshLiveSession() {
           // the same response a few lines below, had it right.
           evicted: t.evicted_by ?? null,
           pruned: t.pruned_by ?? null,
+          compacted: t.compacted_by ?? null,
+          folding: t.compacted
+            ? { turns: t.compacted.turns, tokens: t.compacted.tokens, summaryTokens: t.compacted.summary_tokens }
+            : null,
         })
       }
       if (t.text || (t.tools && t.tools.length)) {
@@ -1426,6 +1444,7 @@ export async function refreshLiveSession() {
           usage: t.usage || null,
           evicted: t.evicted_by ?? null,
           pruned: t.pruned_by ?? null,
+          compacted: t.compacted_by ?? null,
           startedAt: t.started_at_ms ?? null,
           firstAt: t.first_token_at_ms ?? null,
           endedAt: t.ended_at_ms ?? null,

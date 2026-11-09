@@ -559,6 +559,7 @@ pub fn header(
         repeat: Some(budget.repeat),
         prune: Some(budget.prune),
         results: Some(budget.results),
+        fold: Some(budget.fold),
         authority_draft: authority.draft_note(),
         authority_plan: authority.plan_note(),
         tool_calls: tool_calls.native().then(|| tool_calls.as_str().to_string()),

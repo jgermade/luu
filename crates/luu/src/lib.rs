@@ -494,6 +494,13 @@ enum Command {
         #[arg(long)]
         prune_results: bool,
 
+        /// Fold the open job's oldest turns into one summary of their evidence
+        /// before evicting any: the fourth rung, between pruning and eviction.
+        /// Off by default until measured. See
+        /// `RECORD/2026-11-09.fold-behind.completed.md`.
+        #[arg(long)]
+        fold_behind: bool,
+
         /// Pin the sampler's temperature. Unset leaves it to the server's own
         /// default, which is not fixed across calls.
         #[arg(long)]
@@ -713,6 +720,13 @@ enum Command {
         /// behind a line that never moves.
         #[arg(long)]
         prune_results: bool,
+
+        /// Fold the open job's oldest turns into one summary of their evidence
+        /// before evicting any: the fourth rung, between pruning and eviction.
+        /// Off by default until measured. See
+        /// `RECORD/2026-11-09.fold-behind.completed.md`.
+        #[arg(long)]
+        fold_behind: bool,
 
         /// Pin the sampler's temperature, so two runs meant to be compared
         /// differ only by what they're testing. Unset leaves it to the
@@ -2531,6 +2545,15 @@ fn resend_rules(
     )
 }
 
+/// The fold-behind rule: the flag turns it on, and otherwise the file says, as
+/// `--prune-behind` and `prune` do — a `bool` can only turn a rule on.
+fn fold_rule(table: crate::provider::Resend, behind: bool) -> agent_core::context::Fold {
+    match behind {
+        true => agent_core::context::Fold::Behind,
+        false => table.fold.unwrap_or_default(),
+    }
+}
+
 /// The `[resend]` table this machine names, for a surface that has not already
 /// loaded the file.
 ///
@@ -3457,6 +3480,7 @@ pub async fn run() -> Result<()> {
         no_repeat_once,
         prune_behind,
         prune_results,
+        fold_behind,
         temperature,
         seed,
         map_tokens,
@@ -3642,7 +3666,8 @@ pub async fn run() -> Result<()> {
                     prune_behind,
                     prune_results,
                 ),
-            ),
+            )
+            .folding(fold_rule(resend, fold_behind)),
             counter,
             tokenizer,
             agency,
@@ -3745,6 +3770,7 @@ pub async fn run() -> Result<()> {
         no_repeat_once,
         prune_behind,
         prune_results,
+        fold_behind,
         temperature,
         seed,
         map_tokens,
@@ -3808,15 +3834,17 @@ pub async fn run() -> Result<()> {
         eprintln!("warning: {warning}");
     }
 
+    let machine = machine_resend();
     let budget = budget_under(
         Budget::new(context_limit, reserve, evict.policy(low_water)),
         resend_rules(
-            machine_resend(),
+            machine,
             repeat_asked(repeat_once, no_repeat_once),
             prune_behind,
             prune_results,
         ),
-    );
+    )
+    .folding(fold_rule(machine, fold_behind));
     let started_at = now_ms();
     let recorder = match &record {
         Some(path) => Some(std::sync::Arc::new(
@@ -4110,6 +4138,27 @@ pub async fn run() -> Result<()> {
         // Said out loud, not only into the recording: a run that quietly
         // forgets half its history looks exactly like one that answers from all
         // of it, and the difference is the whole subject.
+        if let Some(folded) = &selection.folding {
+            let turns = folded
+                .turns
+                .iter()
+                .map(|turn| turn.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "\n== compacted turn{} {turns} — {} → {} tokens{}, folded behind to keep the window",
+                match folded.turns.len() {
+                    1 => "",
+                    _ => "s",
+                },
+                folded.tokens,
+                folded.summary_tokens,
+                match folded.counter.is_approximate() {
+                    true => " (approximate)",
+                    false => "",
+                },
+            );
+        }
         if let Some(evicted) = &selection.eviction {
             let turns = evicted
                 .turns
@@ -4150,6 +4199,15 @@ pub async fn run() -> Result<()> {
             // Before the prompt it explains, so a file reads in the order the
             // session happened: the history was cut, then this is what was
             // sent.
+            if let Some(folded) = selection.folding.clone() {
+                recorder.write(&Event::Protocol(ServerMessage::Compacted {
+                    turn,
+                    turns: folded.turns,
+                    tokens: folded.tokens,
+                    summary_tokens: folded.summary_tokens,
+                    counter: folded.counter,
+                }));
+            }
             if let Some(evicted) = selection.eviction.clone() {
                 recorder.write(&Event::Protocol(ServerMessage::Evicted {
                     turn,
@@ -4562,6 +4620,7 @@ mod tests {
             repeat,
             prune,
             results,
+            fold: None,
         };
         let says_nothing = table(None, None, None);
 

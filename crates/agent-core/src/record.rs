@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::{Counter, Eviction, Prune, Repeat, Results};
+use crate::context::{Counter, Eviction, Fold, Prune, Repeat, Results};
 use crate::protocol::ServerMessage;
 use crate::sandbox::AuthorityNote;
 use crate::trace::TraceMessage;
@@ -235,7 +235,12 @@ use crate::trace::TraceMessage;
 /// its sandbox, as an absolute path — which a resume makes the session again
 /// in, and which `same_place` compares where both runs say. Absent before it.
 /// See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
-pub const FORMAT: u32 = 27;
+///
+/// **28: the fold-behind rung.** The header names `fold` beside the three
+/// resend rules, and a `compacted` protocol line says when it moved
+/// (`protocol::VERSION` 13). Absent before it, which was `never`. See
+/// `RECORD/2026-11-09.fold-behind.completed.md`.
+pub const FORMAT: u32 = 28;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -486,6 +491,11 @@ pub enum RecordLine {
         /// effect.
         #[serde(default)]
         results: Option<Results>,
+        /// Whether the open job's oldest turns were folded behind before any
+        /// was evicted — the fourth rung. `None` in a stream before format 28,
+        /// which does not say; every run before it was `never`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fold: Option<Fold>,
         /// What a draft turn in this session is told about the authority it
         /// runs under, when this session's config set anything. `None` in a
         /// stream written before format 18, for the same reason the three
@@ -532,6 +542,7 @@ mod tests {
             repeat: Some(Repeat::Once),
             prune: Some(Prune::Behind),
             results: Some(Results::Cited),
+            fold: Some(Fold::Behind),
             authority_draft: None,
             authority_plan: None,
             tool_calls: None,
@@ -724,6 +735,7 @@ mod tests {
             repeat: Some(repeat),
             prune: Some(prune),
             results: Some(results),
+            fold: None,
             authority_draft: None,
             authority_plan: None,
             tool_calls: None,

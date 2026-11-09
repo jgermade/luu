@@ -480,6 +480,10 @@
   // jobs with no plan on the line, and the rule without `approved` read them
   // as drafts. Row 45.
   const isDraft = job => !!job && !job.plan && !job.approved
+  // `turns 1-6`, or `turn 4`: what a fold behind took, as its own line says it.
+  const foldedSpan = turns => turns.length === 1
+    ? `turn ${turns[0]}`
+    : `turns ${turns[0]}–${turns[turns.length - 1]}`
   $: drafting = isDraft(live)
   // Whether the server would take a reopen of this one: `Context::reopen_job`
   // succeeds for the **last** job and no other, because reopening an earlier
@@ -1034,7 +1038,16 @@
                  message saying what the page already shows. What stays is the
                  line that says something only some messages have: that the
                  prompt no longer carries them. -->
-            <div :if="entry.message.evicted || entry.message.pruned" class="cut">
+            <!-- The turn whose window was full said so: what it folded, and
+                 what that saved. Row 21's answer: a full window is told, not
+                 absorbed. -->
+            <div :if="entry.message.folding" class="cut">
+              <span class="folded">
+                {{ foldedSpan(entry.message.folding.turns) }} compacted to keep the window:
+                {{ entry.message.folding.tokens }} → {{ entry.message.folding.summaryTokens }} tokens
+              </span>
+            </div>
+            <div :if="entry.message.evicted || entry.message.pruned || entry.message.compacted" class="cut">
               <!-- Kept and marked, never removed: the prompt no longer carries
                    this and the transcript still has to be able to say so. -->
               <span :if="entry.message.evicted" class="gone">
@@ -1045,8 +1058,13 @@
                    that reason, and not shown at all on a turn that was
                    afterwards evicted whole — there the stronger fact is the
                    true one. -->
-              <span :if="entry.message.pruned && !entry.message.evicted" class="cited">
+              <span :if="entry.message.pruned && !entry.message.evicted && !entry.message.compacted" class="cited">
                 code out of the prompt since turn {{ entry.message.pruned }}
+              </span>
+              <!-- Folded behind: still in the prompt, as a summary of what it
+                   did. Not struck through, and not shown on one evicted since. -->
+              <span :if="entry.message.compacted && !entry.message.evicted" class="cited">
+                in the prompt as a summary since turn {{ entry.message.compacted }}
               </span>
             </div>
             <div :if="!entry.parts" class="text">{{ entry.message.text }}</div>
@@ -1847,6 +1865,7 @@
   article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
   .gone { color: var(--luu-warn); text-transform: none; letter-spacing: 0; }
   .cited { color: var(--luu-fg-muted); text-transform: none; letter-spacing: 0; }
+  .folded { color: var(--luu-accent); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* A fenced block in a reply: code on a card of its own, its language and a
      copy button over it, scrolled sideways rather than wrapped. */

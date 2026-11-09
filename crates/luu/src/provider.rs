@@ -843,6 +843,10 @@ pub struct Resend {
     /// an effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub results: Option<agent_core::context::Results>,
+    /// What the open job's oldest turns become before any is evicted: `never`
+    /// (absent) or `behind`. See `agent_core::context::Fold`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<agent_core::context::Fold>,
 }
 
 /// `[authority]`: what a draft or a plan is told about itself, as this
@@ -3071,6 +3075,7 @@ mod tests {
                 repeat: Some(agent_core::context::Repeat::Once),
                 prune: None,
                 results: None,
+                fold: None,
             })
             .render()
             .expect("it renders");

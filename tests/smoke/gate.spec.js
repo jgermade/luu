@@ -1843,3 +1843,43 @@ test("a job approved before the plan was on the line is not a draft", async ({ p
   await expect(live.locator("button.trigger")).toHaveText("plan")
   await expect(live.locator("button.trigger")).toHaveAttribute("title", /^job 1 · an old job/)
 })
+
+/**
+ * Row 21: a full window folded behind is said in the chat, at the turn that
+ * folded, and the folded turns are marked — not struck through, because they
+ * are still in the prompt as a summary. Replayed from a recording the test
+ * serves. See `RECORD/2026-11-09.fold-behind.completed.md`.
+ */
+test("a fold behind is said at the turn that folded, and the folded turns are marked", async ({ page }) => {
+  const at = n => n * 10
+  const turn = (n, prompt) => [
+    { channel: "protocol", at_ms: at(n), message: { type: "turn_started", turn: n, prompt, job: 1 } },
+    { channel: "protocol", at_ms: at(n) + 1, message: { type: "token", turn: n, text: `answer ${n}` } },
+    { channel: "protocol", at_ms: at(n) + 2, message: { type: "ended", turn: n, reason: "stop" } },
+  ]
+  const lines = [
+    { channel: "header", format: 28, protocol: 13, backend: "mock", model: "mock" },
+    ...turn(1, "first question"),
+    ...turn(2, "second question"),
+    { channel: "protocol", at_ms: at(3), message: { type: "turn_started", turn: 3, prompt: "third question", job: 1 } },
+    { channel: "protocol", at_ms: at(3) + 1, message: {
+      type: "compacted", turn: 3, turns: [1, 2], tokens: 480, summary_tokens: 31,
+      counter: { kind: "approximate" } } },
+    { channel: "protocol", at_ms: at(3) + 2, message: { type: "token", turn: 3, text: "answer 3" } },
+    { channel: "protocol", at_ms: at(3) + 3, message: { type: "ended", turn: 3, reason: "stop" } },
+  ]
+  await page.route("**/folded.jsonl", route => route.fulfill({
+    contentType: "application/x-ndjson",
+    body: lines.map(line => JSON.stringify(line)).join("\n") + "\n",
+  }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html?replay=folded.jsonl`)
+  await chooseFolder(page)
+
+  const said = page.locator(".transcript .cut .folded")
+  await expect(said).toHaveText(/turns 1–2 compacted to keep the window:\s+480 → 31 tokens/, { timeout: 15_000 })
+  await expect(page.locator(".transcript article.user", { hasText: "third question" }).locator(".folded")).toHaveCount(1)
+  const marked = page.locator(".transcript .cut .cited", { hasText: "in the prompt as a summary since turn 3" })
+  await expect(marked).toHaveCount(4)
+  await expect(page.locator(".transcript article.evicted")).toHaveCount(0)
+})

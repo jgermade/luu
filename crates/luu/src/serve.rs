@@ -351,6 +351,7 @@ impl Destination {
                 repeat: budget.repeat,
                 prune: budget.prune,
                 results: budget.results,
+                fold: budget.fold,
                 ..self.settings.clone()
             },
             authority: self.authority.clone(),
@@ -833,6 +834,10 @@ pub struct Settings {
     repeat: agent_core::context::Repeat,
     prune: agent_core::context::Prune,
     results: agent_core::context::Results,
+    /// What the open job's oldest turns become before any is evicted. See
+    /// `agent_core::context::Fold`.
+    #[serde(default)]
+    fold: agent_core::context::Fold,
     /// What a draft or a plan this session opens is told about itself, the
     /// same reason `repeat`/`prune`/`results` are here: a fact a session may
     /// choose and nothing can read back is a fact the page can contradict.
@@ -947,6 +952,7 @@ impl Settings {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            fold: budget.fold,
             counter,
             counter_warning,
             unconfigured: provider.unconfigured(),
@@ -1243,6 +1249,7 @@ impl App {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            fold: budget.fold,
             authority: authority.clone(),
             counter: counter_id.clone(),
             counter_warning,
@@ -1368,6 +1375,7 @@ impl App {
                     view.repeat = Some(budget.repeat);
                     view.prune = Some(budget.prune);
                     view.results = Some(budget.results);
+                    view.fold = Some(budget.fold);
                     view.tool_calls = provider
                         .tool_calls
                         .native()
@@ -5608,6 +5616,20 @@ async fn begin_turn(
     // Before the prompt it explains: this is what the turn no longer carries,
     // and a client reading in order should learn that the history was cut
     // before it is handed the prompt that was cut from.
+    // Before the eviction, in the order the selection did them.
+    if let Some(folded) = selection.folding.clone() {
+        app.publish(
+            live,
+            Event::Protocol(ServerMessage::Compacted {
+                turn,
+                turns: folded.turns,
+                tokens: folded.tokens,
+                summary_tokens: folded.summary_tokens,
+                counter: folded.counter,
+            }),
+        )
+        .await;
+    }
     if let Some(evicted) = selection.eviction.clone() {
         app.publish(
             live,
@@ -11104,6 +11126,7 @@ struct RunningResend {
     repeat: agent_core::context::Repeat,
     prune: agent_core::context::Prune,
     results: agent_core::context::Results,
+    fold: agent_core::context::Fold,
 }
 
 impl RunningResend {
@@ -11112,6 +11135,7 @@ impl RunningResend {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            fold: budget.fold,
         }
     }
 }
@@ -11217,6 +11241,24 @@ fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<Str
             }
             other => other.unwrap_or(live.results),
         },
+        // Prune's rule, for prune's reason: the fold-behind line is a
+        // ratchet, so turning it off now stops it moving and gives back
+        // nothing already folded — a control that would report a change it
+        // did not make. On moves live; off waits.
+        fold: match asked.fold {
+            Some(agent_core::context::Fold::Never)
+                if live.fold == agent_core::context::Fold::Behind =>
+            {
+                waiting.push(
+                    "fold: the fold-behind line is a ratchet, so turning it off now would \
+                     unfold nothing already behind it. The file says never; this session keeps \
+                     folding until the next one starts."
+                        .to_string(),
+                );
+                live.fold
+            }
+            other => other.unwrap_or(live.fold),
+        },
         ..live
     };
     (budget, waiting)
@@ -11315,6 +11357,7 @@ async fn put_resend(
             view.repeat = Some(budget.repeat);
             view.prune = Some(budget.prune);
             view.results = Some(budget.results);
+            view.fold = Some(budget.fold);
         }
         // Written down now rather than at the next turn's checkpoint, for the
         // reason a resume is: a session moved and then left alone would lose
@@ -11585,6 +11628,8 @@ struct NewSession {
     prune: Option<agent_core::context::Prune>,
     #[serde(default)]
     results: Option<agent_core::context::Results>,
+    #[serde(default)]
+    fold: Option<agent_core::context::Fold>,
     /// What a draft or a plan this session opens is told about itself, each
     /// absent meaning *whatever this server is already under* — the same
     /// three-level precedence [`NewSession::resend`] gives `repeat`, `prune`
@@ -11653,6 +11698,7 @@ impl NewSession {
             repeat: self.repeat.or(machine.repeat).unwrap_or(budget.repeat),
             prune: self.prune.or(machine.prune).unwrap_or(budget.prune),
             results: self.results.or(machine.results).unwrap_or(budget.results),
+            fold: self.fold.or(machine.fold).unwrap_or(budget.fold),
             ..budget
         };
         (asked != budget).then_some(asked)
@@ -12245,6 +12291,10 @@ fn retarget_header(
                 Some(sending.budget.prune),
                 Some(sending.budget.results),
             )
+        // And the fold-behind rung, where absent is `never` — every stream
+        // before format 28 ran without it, so it is not a reason to write a
+        // header for each of them.
+        && view.fold.unwrap_or_default() == sending.budget.fold
         // A fifth term, `authority`'s own reason: a session whose notes moved
         // is a session rendering under something else, the same fact a rule
         // moving already is.
@@ -12654,6 +12704,7 @@ async fn new_session(
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.fold = Some(sending.budget.fold);
         view.tool_calls = sending
             .tool_calls
             .native()
@@ -13288,6 +13339,7 @@ async fn settle_move(
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.fold = Some(sending.budget.fold);
         view.authority_draft = sending.authority.draft_note();
         view.authority_plan = sending.authority.plan_note();
         view.tool_calls = sending
@@ -13882,6 +13934,7 @@ async fn resume_session(
             live_view.repeat = Some(sending.budget.repeat);
             live_view.prune = Some(sending.budget.prune);
             live_view.results = Some(sending.budget.results);
+            live_view.fold = Some(sending.budget.fold);
             live_view.authority_draft = sending.authority.draft_note();
             live_view.authority_plan = sending.authority.plan_note();
             live_view.tool_calls = sending
@@ -14316,6 +14369,7 @@ mod tests {
                         repeat: agent_core::context::Repeat::Once,
                         prune: agent_core::context::Prune::Never,
                         results: agent_core::context::Results::Kept,
+                        fold: agent_core::context::Fold::Never,
                         counter: agent_core::context::Counter::Approximate,
                         counter_warning: None,
                         select_tokens,
@@ -14440,6 +14494,7 @@ mod tests {
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.fold = Some(sending.budget.fold);
     }
 
     /// One destination, for the tests that only care that two of them differ.
@@ -14462,6 +14517,7 @@ mod tests {
                 repeat: agent_core::context::Repeat::Once,
                 prune: agent_core::context::Prune::Never,
                 results: agent_core::context::Results::Kept,
+                fold: agent_core::context::Fold::Never,
                 counter: agent_core::context::Counter::Approximate,
                 counter_warning: None,
                 select_tokens: 0,
@@ -14883,6 +14939,7 @@ mod tests {
             repeat,
             prune,
             results,
+            fold: None,
         };
 
         // Everything turned on: all three move, nothing waits. Turning a rule

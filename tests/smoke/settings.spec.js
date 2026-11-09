@@ -314,6 +314,8 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await expect(running.locator("dd").nth(0)).toContainText("once")
   await expect(running.locator("dd").nth(1)).toContainText("never")
   await expect(running.locator("dd").nth(2)).toContainText("kept")
+  // And the fourth rung, off until it is measured (row 21).
+  await expect(running.locator("dd").nth(3)).toContainText("never")
 
   // The editor below it: this machine's default, which says nothing yet. Unset
   // is not off — it is the code's default, which for this rule is now `once`.
@@ -348,7 +350,9 @@ test("the resend rules are chosen from the page, and a save says what it did not
   expect(onDisk).toContain("[provider.here]")
 
   // Rule B on, which is clean: the prune line starts moving.
-  await editor.locator('button:has-text("behind")').click()
+  // The Prune control by its name: Fold has a "behind" too since 2026-11-09.
+  const prune = editor.getByRole("radiogroup", { name: "Prune" })
+  await prune.locator('button:has-text("behind")').click()
   await page.locator("#sessions-resend button.save").click()
   await expect(running.locator("dd").nth(1)).toContainText("behind")
 
@@ -356,7 +360,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // a ratchet, so the running session keeps pruning; the file says never, and
   // the page has to say both rather than reporting a change that did not
   // happen.
-  await editor.locator('button:has-text("never")').click()
+  await prune.locator('button:has-text("never")').click()
   await page.locator("#sessions-resend button.save").click()
 
   const waiting = page.locator("#sessions-resend .waiting")
