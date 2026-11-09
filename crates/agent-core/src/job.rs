@@ -1548,6 +1548,20 @@ mod tests {
         );
     }
 
+    /// A file a plan reads and writes, declared in both lists as a model often
+    /// does, may be written: the read did not shadow the write. Row 54.
+    #[test]
+    fn a_file_in_files_and_writes_may_be_written() {
+        let plan = Plan {
+            files: vec!["Cargo.toml".into()],
+            writes: vec!["Cargo.toml".into()],
+            ..Plan::default()
+        };
+        let narrowed = plan.narrow(&session(), 1).unwrap();
+        let check = narrowed.check_path(std::path::Path::new("Cargo.toml"), Access::ReadWrite);
+        assert!(check.verdict.allowed, "{}", check.verdict.rule);
+    }
+
     /// A plan that declares nothing grants nothing. That is the point of
     /// narrowing and it is also its sharpest edge, so it is pinned here.
     #[test]

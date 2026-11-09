@@ -787,6 +787,11 @@ TMPDIR = "./.tmp"               # `./` is under the session's folder, resolved t
 ```
 
 - **Longest match wins**, so a narrower rule under a broader one grants more.
+  **Two rules for one path are one**, granting the more of the two, however
+  the path was written and in whichever order: a file's `.` at read and
+  `--allow-write .`, or a plan's file in both `files` and `writes`. The kernel
+  was always given the union; the in-process check now answers the same
+  ([`RECORD/2026-11-09.one-rule-per-path.completed.md`](RECORD/2026-11-09.one-rule-per-path.completed.md)).
 - **`[sandbox.env]` says where a child's scratch and its tools' homes go.** A
   value that is `.` or starts with `./` is resolved against the session's
   folder; anything else is passed as written. Set last, over what `serve`

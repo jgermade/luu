@@ -136,7 +136,7 @@ in *italics* are in
 | 51 | **Settings edits environments, and a refusal's *Add to the policy*.** Lists and the new session's dialog were done 2026-10-23. Environments have to be decided first: kept as saved trios of lists, or gone with the postures | a decision on environments | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
 | 52 | **Always: a grant for the project**. Put off by decision | a decision | *always is for later* |
 | 53 | **A yes that needs a signature** where `[approvals] required = true` | row 16 | [`a-refused-write-asks`](../../RECORD/2026-10-02.a-refused-write-asks.completed.md) §Still open |
-| 54 | **The `--allow-*` flags add a second rule for a path, and the first answers**: `policies::widen` merges by path, and the flags do not | nothing | *step 2a, built* |
+| ~~54~~ | ~~**The `--allow-*` flags add a second rule for a path, and the first answers**~~ *Done 2026-11-09*, in `Sandbox::new` rather than the flags: one root per path, the greater access. A plan with a file in both `files` and `writes` was read-only by the same defect — [`one-rule-per-path`](../../RECORD/2026-11-09.one-rule-per-path.completed.md) | ~~nothing~~ | *step 2a, built* |
 | 55 | **More than one call in a reply: the count.** Built 2026-10-25. What is left is the grounded scripts under `--tool-calls native`, with tool cards per step | the count | [`more-than-one-call-in-a-reply`](../../RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md) |
 
 **Section F — the public luu, what is still owed.** Sections F to I of the last

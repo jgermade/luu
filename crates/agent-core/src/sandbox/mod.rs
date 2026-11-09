@@ -360,7 +360,7 @@ impl Sandbox {
     pub fn new(policy: &SandboxPolicy, base: &Path) -> Result<Self, SandboxError> {
         let base = base.canonicalize().map_err(SandboxError::Base)?;
 
-        let mut roots = Vec::with_capacity(policy.paths.len() + SYSTEM_ROOTS.len());
+        let mut roots: Vec<Root> = Vec::with_capacity(policy.paths.len() + SYSTEM_ROOTS.len());
         for rule in &policy.paths {
             let source = rule.path.display().to_string();
             let resolved = expand_home(&rule.path);
@@ -375,6 +375,19 @@ impl Sandbox {
                         source_path: source.clone(),
                         source: source_error,
                     })?;
+            // One root per path, granting the most any rule for it grants.
+            // Two used to stand, and the in-process check took whichever came
+            // first while the kernel, given both, held the child to their
+            // union: `--allow-write .` over a file's `.` at read read as
+            // read-only to a tool and read-write to a command. Roadmap row
+            // 54; see `RECORD/2026-11-09.one-rule-per-path.completed.md`.
+            if let Some(held) = roots.iter_mut().find(|root| root.path == path) {
+                if rule.access > held.access {
+                    held.access = rule.access;
+                    held.source = source;
+                }
+                continue;
+            }
             roots.push(Root {
                 path,
                 access: rule.access,
@@ -991,6 +1004,33 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// Row 54: two rules for one path are one root, granting the more of the
+    /// two, whichever order they came in and however the path was written —
+    /// `--allow-write .` over a file's `.` at read, or a plan's file in both
+    /// `files` and `writes`.
+    #[test]
+    fn two_rules_for_one_path_grant_the_more_of_the_two() {
+        let fixture = Fixture::new("one-rule");
+        let file = fixture.proj().join("src/main.rs");
+        for (first, second) in [
+            (Access::Read, Access::ReadWrite),
+            (Access::ReadWrite, Access::Read),
+        ] {
+            let mut policy = SandboxPolicy::default();
+            policy.allow(".", first);
+            policy.allow(fixture.proj(), second);
+            let sandbox = fixture.sandbox(&policy);
+            let explicit: Vec<_> = sandbox.roots().iter().filter(|r| !r.implicit).collect();
+            assert_eq!(explicit.len(), 1, "{first:?} then {second:?}: {explicit:?}");
+            let check = sandbox.check_path(&file, Access::ReadWrite);
+            assert!(
+                check.verdict.allowed,
+                "{first:?} then {second:?}: {}",
+                check.verdict.rule
+            );
         }
     }
 
