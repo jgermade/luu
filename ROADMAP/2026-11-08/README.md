@@ -104,11 +104,11 @@ Every run is on a server started with one slot (`-np 1`), for the reason
 | 30 | **Whether a draft's fold is worth its summary** | a design argument | [`every-turn-belongs-to-a-job`](../../RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md) §Still open |
 | 28 | **The two keys by content, and the migration they cost**. Ordered, not scheduled | rule A reaching more than spans | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §sixth, §eleventh |
 
-**Section C — the gate.** 43 still leads, because it may be a sandbox defect.
+**Section C — the gate.** ~~43 still leads, because it may be a sandbox defect.~~ 43 was one, though not the one it named: [`one-site-chooses-what-holds-a-turn`](../../RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md). 44 leads now.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 43 | **The two sites that choose the floor decide differently**: `begin_turn` trusts `session.narrowed`, while `start_turn` checks it against the live job. The next move is a test that tries. Several live sessions (row 14, closed) make it worth trying sooner | nothing | [`what-an-unapproved-turn-may-reach`](../../RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md) §1 |
+| ~~43~~ | ~~**The two sites that choose the floor decide differently**: `begin_turn` trusts `session.narrowed`, while `start_turn` checks it against the live job. The next move is a test that tries. Several live sessions (row 14, closed) make it worth trying sooner~~ *Done 2026-11-09*: one function for both. The stale narrowing has no path; what the test found instead is an approved job whose plan stopped resolving ran on the floor, and now runs on nothing | ~~nothing~~ | [`what-an-unapproved-turn-may-reach`](../../RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md) §1 |
 | 44 | **The floor is shown only at the gate** | nothing | the same, §Still open |
 | 45 | **A pre-alternation recording reads an approved job as a draft** | nothing | [`the-alternation-on-the-page`](../../RECORD/2026-09-21.the-alternation-on-the-page.completed.md) §Still open |
 | 12 | **Grants are counted as path strings and not as kinds**: closed by a field written at approval | the field | [`one-counting-surface`](../../RECORD/2026-09-19.one-counting-surface.completed.md) |
@@ -173,7 +173,7 @@ gantt
     Drift under a tool's own name          :drift, after fmt, 2d
     Denominators                           :tally, after drift, 1d
     section C — the gate
-    Two sites choose the floor             :crit, sites, 2026-11-09, 1d
+    Two sites choose the floor (done)      :done, sites, 2026-11-09, 1d
     The floor while drafting               :floor, after sites, 1d
     Pre-alternation job read as draft      :prealt, after floor, 1d
     section F — the public luu
@@ -194,9 +194,9 @@ unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c).
   cannot be carried again.
 - **Row 42 should ride along with 38**: a run that keeps the raw reply answers
   *how often* for free. Doing it afterwards costs a second run.
-- **Row 43 is checkout work, and it got more urgent.** Two live sessions now
+- ~~**Row 43 is checkout work, and it got more urgent.** Two live sessions now
   each have a floor, and a narrowing left behind by a job that is no longer
-  live is easier to reach than it was with one.
+  live is easier to reach than it was with one.~~ *Done 2026-11-09.*
 - **Row 51 waits on a decision, not on code**: whether environments survive
   postures. Building their editor first would decide it by accident.
 - **Section F needs things this repository does not have** (an SMTP account, a

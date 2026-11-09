@@ -4864,9 +4864,28 @@ async fn approve_plan(
                     counter.as_ref(),
                 );
                 debug_assert_eq!(approved.job, job, "the signature is bound to this id");
-                // The draft's own sandbox was never narrowed, so there is
-                // nothing to drop here — the narrowing below is the first one
-                // this pair of jobs has had.
+                // The job's own sandbox, from here until it closes — set
+                // under the lock the approval was made under, so no prompt can
+                // start a turn in the job before it is narrowed. A plan that
+                // names nothing narrows to nothing, which is the point: a turn
+                // inside a job may touch what the job was approved for. The
+                // draft's own sandbox was never narrowed, so there is nothing
+                // to drop: this is the first narrowing this pair of jobs has had.
+                session.narrowed = match plan.narrow(
+                    live.agency().await.gate_sandbox(&plan.commands).as_ref(),
+                    job,
+                ) {
+                    Ok(sandbox) => Some((job, Arc::new(sandbox))),
+                    // Only a path that stopped existing between the check and
+                    // here can do this. Falling back to the session's sandbox
+                    // would silently un-narrow the job, so the job runs with
+                    // nothing granted and the denials say which plan refused —
+                    // `turn_sandbox` is what makes `None` mean that.
+                    Err(error) => {
+                        eprintln!("job {job}: the approved plan could not be resolved: {error}");
+                        None
+                    }
+                };
                 Some((approved, pending.objective, plan, dropped))
             }
             // An approval for something that is no longer on the table, or a
@@ -4928,28 +4947,6 @@ async fn approve_plan(
             ),
         )
         .await;
-    }
-
-    // The job's own sandbox, from here until it closes. A plan that names
-    // nothing narrows to nothing, which is the point: a turn inside a job may
-    // touch what the job was approved for.
-    let narrowed = match plan.narrow(
-        live.agency().await.gate_sandbox(&plan.commands).as_ref(),
-        job,
-    ) {
-        Ok(sandbox) => Some(Arc::new(sandbox)),
-        // Only a path that stopped existing between the check and here can do
-        // this. Falling back to the session's sandbox would silently un-narrow
-        // the job, so the job runs with nothing granted and the denials say
-        // which plan refused.
-        Err(error) => {
-            eprintln!("job {job}: the approved plan could not be resolved: {error}");
-            None
-        }
-    };
-    {
-        let mut session = live.session.lock().await;
-        session.narrowed = narrowed.map(|sandbox| (job, sandbox));
     }
 
     app.publish(
@@ -5317,6 +5314,38 @@ fn floor_holding(session: &Session, agency: &crate::session::Agency) -> Arc<Sand
     }
 }
 
+/// What holds the turn about to be built: the **one** answer `begin_turn` (the
+/// selector, the authority note) and `start_turn` (the tools) both read.
+///
+/// - No live job, or a draft: the floor, through [`floor_holding`].
+/// - A live job with a plan, narrowed for it: that narrowing.
+/// - A live job with a plan and **no narrowing of its own**: nothing, under
+///   `Plan(job)`. A plan that stopped resolving (at the approval, a reopen or
+///   a resume) leaves `narrowed` at `None`, and the floor there would hold an
+///   approved job to the policy file rather than to what was approved.
+///
+/// The two sites used to decide separately, and differently. See
+/// `RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md`.
+fn turn_sandbox(session: &Session, agency: &crate::session::Agency) -> Arc<Sandbox> {
+    let planned = session.context.live_job().filter(|job| {
+        session
+            .context
+            .job(*job)
+            .is_some_and(|job| job.plan.is_some())
+    });
+    let Some(job) = planned else {
+        return floor_holding(session, agency);
+    };
+    match &session.narrowed {
+        Some((narrowed, sandbox)) if *narrowed == job => sandbox.clone(),
+        _ => Arc::new(
+            Plan::default()
+                .narrow(agency.sandbox.as_ref(), job)
+                .expect("a plan that names nothing has nothing to resolve"),
+        ),
+    }
+}
+
 async fn begin_turn(
     app: &Arc<App>,
     live: &Arc<LiveSession>,
@@ -5361,11 +5390,9 @@ async fn begin_turn(
         // than separately for the selector below and for the note this feeds:
         // two readings of one decision is how they drift, the same reasoning
         // the selector's own comment already gives for reading it through the
-        // live job rather than the policy file.
-        let sandbox = match &session.narrowed {
-            Some((_, sandbox)) => sandbox.clone(),
-            None => floor_holding(&session, &agency),
-        };
+        // live job rather than the policy file. And the same function
+        // `start_turn` reads, for the same reason one step further out.
+        let sandbox = turn_sandbox(&session, &agency);
         // What this turn is told about that authority, if this machine or this
         // session set anything. `Authority::Policy` gets no table and
         // therefore no note — see `crate::provider::AuthorityNotes`.
@@ -5667,12 +5694,11 @@ async fn start_turn(app: Arc<App>, live: Arc<LiveSession>, prompt: String) {
     // nobody having approved anything. The floor is that one expression
     // changed, and every site that sets `narrowed = None` means it without
     // being touched. See `RECORD/2026-09-21.the-drafts-floor.completed.md`.
+    // An approved job that lost its narrowing gets nothing, not the floor:
+    // see [`turn_sandbox`].
     let sandbox = {
         let session = live.session.lock().await;
-        match (session.context.live_task(), &session.narrowed) {
-            (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
-            _ => floor_holding(&session, &agency),
-        }
+        turn_sandbox(&session, &agency)
     };
     // What *allow once* runs a call under, when this turn may ask at all: only
     // a draft's, and only where an unsigned click is an approval this server
@@ -15071,6 +15097,64 @@ mod tests {
         assert!(
             session.narrowed.as_ref().is_some_and(|(id, _)| *id == 2),
             "the sandbox narrows at the approval, and only there",
+        );
+    }
+
+    /// Row 43: what holds a turn is one decision, and an approved job that
+    /// lost its narrowing gets nothing rather than the floor.
+    ///
+    /// The floor is checked to read `Cargo.toml` first, or *denied* would prove
+    /// nothing. See `RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md`.
+    #[tokio::test]
+    async fn an_approved_job_without_its_narrowing_runs_on_nothing() {
+        let app = app(&[PLAN, "the answer"]);
+        let live = app.current();
+        on_prompt(app.clone(), live.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await);
+
+        let agency = live.agency().await;
+        let cargo = std::path::Path::new("Cargo.toml");
+        let reads = |sandbox: &Sandbox| {
+            sandbox
+                .check_path(cargo, agent_core::sandbox::Access::Read)
+                .verdict
+                .allowed
+        };
+        assert!(
+            reads(agency.floor()),
+            "the floor reads it, so a denial means something"
+        );
+
+        let mut session = live.session.lock().await;
+        let (_, own) = session.narrowed.clone().expect("narrowed at the approval");
+        assert!(
+            Arc::ptr_eq(&turn_sandbox(&session, &agency), &own),
+            "narrowed for the live job: that narrowing",
+        );
+
+        // What a plan that stopped resolving leaves, and a narrowing that is
+        // some other job's. Neither has a path today; both must fail closed.
+        let stale = Arc::new(Plan::default().narrow(&agency.sandbox, 1).unwrap());
+        for narrowed in [None, Some((1, stale))] {
+            session.narrowed = narrowed;
+            let held = turn_sandbox(&session, &agency);
+            assert!(!reads(&held), "an approved job never falls to the floor");
+            assert!(
+                matches!(held.authority(), Authority::Plan(2)),
+                "and its refusals name the job: {:?}",
+                held.authority(),
+            );
+        }
+
+        // Closed, it is the floor again — whatever `narrowed` still says.
+        let counter = live.destination().await.counter.clone();
+        session.context.close_job(2, counter.as_ref()).unwrap();
+        session.narrowed = Some((2, own));
+        assert!(
+            reads(&turn_sandbox(&session, &agency)),
+            "no live job: the floor"
         );
     }
 

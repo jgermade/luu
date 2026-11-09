@@ -116,9 +116,12 @@ grants and still runs `rg` and `ls`, because what a command may *do* is decided
 by the paths it may touch; `cargo test` in a draft now fails when it writes
 `target/`, which is the intended answer and not a gap.
 
-Mechanically it is one expression: `serve` picks the live job's narrowed sandbox
-when a plan is open and **the floor** otherwise, so every place that clears the
-narrowing means the floor without being edited. The floor is
+Mechanically it is one function, `serve::turn_sandbox`, which both the
+selector and the tools read: the live job's narrowed sandbox when a plan is
+open, **the floor** when a draft is or nothing is, and **nothing** (an empty
+plan's narrowing, under `Plan(n)`) for an approved job with no narrowing of its
+own — a plan that stopped resolving does not drop its job to the floor. See
+`RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md`. The floor is
 `Sandbox::read_only`, which downgrades the *explicit* roots in place — the
 implicit ones (`SYSTEM_ROOTS` and `/dev/null`) exist so a subprocess can start
 and have no write bit to take — and stamps `Authority::Draft`, so a refusal says
