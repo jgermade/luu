@@ -37,6 +37,10 @@ export const savePeers = peers => call("PUT", "./api/peers", { peers })
 /// fingerprint, key }`, `key` being this luu's own.
 export const probePeer = url => call("POST", "./api/peers/probe", { url })
 
+/// Starts taking links on `ssh` (`0.0.0.0:2222`) now, and writes `[server]
+/// ssh` for the next start. Answers the same view as `loadPeers`.
+export const listenPeers = ssh => call("POST", "./api/peers/listen", { ssh })
+
 /// `{ keys, links, accepts }`, the logged-in user's.
 export const loadKeys = () => call("GET", "./api/auth/keys")
 

@@ -148,7 +148,7 @@ leftover, and it says which row it comes from.
 | 71 | **A real mail server** (from 57): a TLS handshake that succeeds against a certificate under a public root, by `smtps://` and by STARTTLS. **Before a second real person is let in** | an SMTP account | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) |
 | 62 | **The `kubernetes` runtime on a cluster**: a session's pod next, after the certificate | a cluster | [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md); [`a-certificate-from-traefik`](../../RECORD/2026-11-04.a-certificate-from-traefik.completed.md) |
 | 63 | **A sweep of `Completed` worker pods** at luu's start | row 62 | [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md) |
-| 72 | **Links' leftovers**: (a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine on the model a linked request names; (c) `[host.*]` removed, which needs a decision first; (d) the links Service's LoadBalancer | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) |
+| 72 | **Links' leftovers**: ~~(a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine on the model a linked request names~~ *(a) and (b) done 2026-11-09*, [`a-linked-request-moves-the-engine`](../../RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md); (c) `[host.*]` removed, which needs a decision first; (d) the links Service's LoadBalancer | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) |
 | ~~73~~ | ~~**Sessions side by side, step 5**: before a session starts on a second local model, say what it will hold in memory. The record stays `WIP` until this is built~~ *Done 2026-11-09*: the dialog names what is loaded, what this would load and the weights together — [`a-second-local-model-warned`](../../RECORD/2026-11-09.a-second-local-model-warned.completed.md) | ~~nothing~~ | [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) §4 |
 | 74 | **Proved on stand-ins, owed on the real thing**: a real authenticator's discoverable login (from 59; Chromium's virtual one would not answer it); the isolation run on the next release's own image layers (from 70); an admin's page clicked through (from 58) | an authenticator; a release | [`passkeys`](../../RECORD/2026-11-05.passkeys.completed.md), [`the-isolation-run-in-the-image`](../../RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md), [`roles-in-the-page`](../../RECORD/2026-11-05.roles-in-the-page.completed.md) |
 
@@ -177,7 +177,7 @@ gantt
     The floor while drafting (done)        :done, floor, after sites, 1d
     Pre-alternation job read as draft (done) :done, prealt, after floor, 1d
     section F — the public luu
-    Links leftovers a and b                :links, 2026-11-10, 2d
+    Links leftovers a and b (done)         :done, links, 2026-11-09, 1d
     A second local model, warned (done)    :done, mem, 2026-11-09, 1d
 ```
 
@@ -200,6 +200,7 @@ unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c).
 - **Row 51 waits on a decision, not on code**: whether environments survive
   postures. Building their editor first would decide it by accident.
 - **Section F needs things this repository does not have** (an SMTP account, a
-  cluster, an authenticator), except 72(a), 72(b) and 73, which are code.
+  cluster, an authenticator), except 72(a), 72(b) and 73, which are code —
+  and all three were built on 2026-11-09.
 - **Nothing in Sections B–F blocks anything in A.** The order above is a choice
   about what to learn first, not a dependency.

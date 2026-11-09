@@ -1756,12 +1756,9 @@ impl Serving {
         // that luu's link. See `crate::link::relay`.
         // Where links come in (a server with users and `[server] ssh`), or
         // where they may go out (a luu with no users).
-        let relays = self.state.links.is_some() || self.state.users.is_none();
-        if relays
-            && let Err(error) =
-                crate::link::relay(self.state.links.clone(), self.state.peers.clone()).await
-        {
-            eprintln!("note: no providers from linked luus: {error:#}");
+        let relays = self.state.links().is_some() || self.state.users.is_none();
+        if relays {
+            start_relay(&self.state).await;
         }
         // The luus this one dials, answered with this router behind a peer's
         // gate. Never from a server with users: there, links come in.
@@ -1775,9 +1772,10 @@ impl Serving {
                 _ => None,
             };
             // And what the peers it lets in reach over their own channels.
-            if let Some(links) = &self.state.links {
-                links.serve_peers(self.router.clone(), token.clone());
-            }
+            self.state
+                .listener
+                .links
+                .serve_peers(self.router.clone(), token.clone());
             self.state.peers.start(self.router.clone(), token, &peers);
         }
         let engines = self.app.engines.clone();
@@ -1966,51 +1964,27 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     };
     // Links from other luus, by key, where `[server] ssh` says: a key on a
     // user's account on a server with users, a key a `[peer.*]` names on a
-    // luu without them. See `crate::link`.
+    // luu without them. See `crate::link`. The links themselves always exist,
+    // empty until something links; the SSH listener starts below when the
+    // file says, or later from Remote access (`start_links`).
     let loaded = load_config()
         .await
         .map(|(config, _)| config)
         .unwrap_or_default();
     let server_table = loaded.server();
-    let (links, link_info, link_port, keys) = match server_table.ssh.as_deref() {
-        None => (None, None, 0, None),
-        Some(ssh) => {
-            let dir = crate::config::dir().context("no state directory for the SSH host key")?;
-            let host = crate::link::host_key(&dir)?;
-            let links = Arc::new(crate::link::Links::default());
-            let (accepts, keys) = match &users {
-                Some(users) => (crate::link::Accepts::Users(users.clone()), None),
-                None => {
-                    let keys = Arc::new(crate::link::Keys::default());
-                    keys.set(loaded.peers());
-                    (crate::link::Accepts::Keys(keys.clone()), Some(keys))
-                }
-            };
-            let listening = crate::link::listen(ssh, host, accepts, links.clone()).await?;
-            let port = listening.address.port();
-            // What a linking luu dials: said, or the origin's host and this
-            // port, or — on a luu without either — the host its page was
-            // asked by, worked out per request (`get_link_info`).
-            let dialled = server_table.ssh_public.clone().or_else(|| {
-                origin
-                    .as_deref()
-                    .and_then(|origin| origin.split("://").nth(1))
-                    .and_then(|rest| rest.split([':', '/']).next())
-                    .map(|host| format!("{host}:{port}"))
-            });
-            eprintln!(
-                "links — ssh on {}, dialled as {}, key {}",
-                listening.address,
-                dialled.as_deref().unwrap_or("the page's own host"),
-                listening.fingerprint
-            );
-            let info = crate::link::LinkInfo {
-                ssh: dialled.unwrap_or_default(),
-                host_key: listening.host_key,
-            };
-            (Some(links), Some(info), port, keys)
-        }
-    };
+    let listener = Arc::new(Listener {
+        links: Arc::new(crate::link::Links::default()),
+        keys: match &users {
+            Some(_) => None,
+            None => {
+                let keys = Arc::new(crate::link::Keys::default());
+                keys.set(loaded.peers());
+                Some(keys)
+            }
+        },
+        on: std::sync::OnceLock::new(),
+        starting: tokio::sync::Mutex::new(()),
+    });
     let starts = crate::engines::for_run(&provider);
     let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
@@ -2109,29 +2083,27 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             (Some(_), Some(origin)) => Some(Arc::new(crate::passkeys::Passkeys::new(origin)?)),
             _ => None,
         },
-        links,
-        link_info,
-        link_port,
-        keys,
+        listener,
         peers: Arc::default(),
     };
+    if let Some(ssh) = server_table.ssh.as_deref() {
+        start_links(&state, ssh, server_table.ssh_public.clone()).await?;
+    }
     if users.is_some() {
         shared_paths_said(&app).await;
     }
     // What a linked luu's own channels reach here: `/api/infer`, and nothing
     // else, as the key's user — no login, no page.
-    if let Some(links) = &state.links {
-        links.offer(
-            Router::new()
-                .route("/api/infer", get(get_infer))
-                .route("/api/infer/{name}/models", get(get_infer_models))
-                .route(
-                    "/api/infer/{name}/to/{*rest}",
-                    axum::routing::any(infer_pass),
-                )
-                .with_state(state.clone()),
-        );
-    }
+    state.listener.links.offer(
+        Router::new()
+            .route("/api/infer", get(get_infer))
+            .route("/api/infer/{name}/models", get(get_infer_models))
+            .route(
+                "/api/infer/{name}/to/{*rest}",
+                axum::routing::any(infer_pass),
+            )
+            .with_state(state.clone()),
+    );
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -2304,6 +2276,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/peers", get(get_peers).put(put_peers))
         .route("/api/peers/probe", post(post_peer_probe))
+        .route("/api/peers/listen", post(post_peers_listen))
         // The providers this luu offers a linked one, by name, the key and
         // the engine staying here. A peer reaches them with `sessions`; a
         // linked luu's own channels reach nothing else. See `crate::link`.
@@ -2386,16 +2359,105 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     })
 }
 
-#[derive(Clone)]
-struct AppRouterState {
-    /// The luus linked to this one, on a server with users and `[server] ssh`.
-    links: Option<Arc<crate::link::Links>>,
-    /// Where they dial, and the key they pin: `/api/link.json`.
-    link_info: Option<crate::link::LinkInfo>,
-    /// The port links come to, for an address worked out from a request.
-    link_port: u16,
+/// Links from other luus, and the SSH listener they come in on.
+///
+/// The links always exist, empty until a luu links; the listener is the part
+/// that can be missing, and once started it stays for the life of `serve`.
+/// It used to be decided once, when `serve` started, and Remote access said
+/// *restart `luu serve`* — row 72(a). See
+/// `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+struct Listener {
+    links: Arc<crate::link::Links>,
     /// On a luu without users, the keys its `[peer.*]` let in.
     keys: Option<Arc<crate::link::Keys>>,
+    /// Where links are dialled and the key they pin (`/api/link.json`), and
+    /// the port they come to — set once, when the listener starts.
+    on: std::sync::OnceLock<(crate::link::LinkInfo, u16)>,
+    /// One start at a time: two clicks must not bind twice.
+    starting: tokio::sync::Mutex<()>,
+}
+
+impl AppRouterState {
+    /// The luus linked to this one — `None` while this luu takes no links,
+    /// as the field this replaced was.
+    fn links(&self) -> Option<&Arc<crate::link::Links>> {
+        self.listener.on.get().map(|_| &self.listener.links)
+    }
+
+    fn link_info(&self) -> Option<&crate::link::LinkInfo> {
+        self.listener.on.get().map(|(info, _)| info)
+    }
+
+    fn link_port(&self) -> u16 {
+        self.listener.on.get().map_or(0, |(_, port)| *port)
+    }
+
+    fn keys(&self) -> Option<&Arc<crate::link::Keys>> {
+        self.listener.keys.as_ref()
+    }
+}
+
+/// Starts the SSH listener on `ssh`, unless one already is. At `serve`'s start
+/// when `[server] ssh` says, and from Remote access without a restart.
+async fn start_links(state: &AppRouterState, ssh: &str, ssh_public: Option<String>) -> Result<()> {
+    let _one = state.listener.starting.lock().await;
+    if state.listener.on.get().is_some() {
+        return Ok(());
+    }
+    let dir = crate::config::dir().context("no state directory for the SSH host key")?;
+    let host = crate::link::host_key(&dir)?;
+    let accepts = match (&state.users, state.keys()) {
+        (Some(users), _) => crate::link::Accepts::Users(users.clone()),
+        (None, Some(keys)) => crate::link::Accepts::Keys(keys.clone()),
+        (None, None) => anyhow::bail!("a luu without users has its peers' keys"),
+    };
+    let listening = crate::link::listen(ssh, host, accepts, state.listener.links.clone()).await?;
+    let port = listening.address.port();
+    // What a linking luu dials: said, or the origin's host and this port, or —
+    // on a luu without either — the host its page was asked by, worked out per
+    // request (`get_link_info`).
+    let dialled = ssh_public.or_else(|| {
+        state
+            .origin
+            .as_deref()
+            .and_then(|origin| origin.split("://").nth(1))
+            .and_then(|rest| rest.split([':', '/']).next())
+            .map(|host| format!("{host}:{port}"))
+    });
+    eprintln!(
+        "links — ssh on {}, dialled as {}, key {}",
+        listening.address,
+        dialled.as_deref().unwrap_or("the page's own host"),
+        listening.fingerprint
+    );
+    let info = crate::link::LinkInfo {
+        ssh: dialled.unwrap_or_default(),
+        host_key: listening.host_key,
+    };
+    let _ = state.listener.on.set((info, port));
+    Ok(())
+}
+
+/// The socket a backend dials for a provider another luu offers. Once per
+/// process: at `serve`'s run where links may come or go, or when a server with
+/// users starts taking links later.
+async fn start_relay(state: &AppRouterState) {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    if let Err(error) =
+        crate::link::relay(Some(state.listener.links.clone()), state.peers.clone()).await
+    {
+        eprintln!("note: no providers from linked luus: {error:#}");
+    }
+}
+
+#[derive(Clone)]
+struct AppRouterState {
+    /// Links from other luus, and the SSH listener they come in on once one
+    /// is started. Read through [`AppRouterState::links`] and its neighbours.
+    listener: Arc<Listener>,
     /// The luus this one dials, and how each is doing.
     peers: Arc<crate::link::Peers>,
     app: Arc<App>,
@@ -7673,7 +7735,7 @@ fn hosts_allowed(
 /// A luu that linked to this one by a key a `[peer.*]` names, on a luu
 /// without users.
 fn accepted_link(state: &AppRouterState, name: &str) -> Option<crate::link::Linked> {
-    state.links.as_ref()?.get("_", name)
+    state.links()?.get("_", name)
 }
 
 /// One `[host.<name>]`, or the answer that says it is not there.
@@ -7730,7 +7792,7 @@ async fn get_hosts(State(state): State<AppRouterState>) -> Response {
     // On a server with users, a user's hosts are the luus they linked, and
     // nobody else's: `[host.*]` is the machine's, with its token paths.
     if state.users.is_some() {
-        let mine = match (&state.links, owner_key()) {
+        let mine = match (state.links(), owner_key()) {
             (Some(links), Some(user)) => links.of(&user),
             _ => Vec::new(),
         };
@@ -7788,7 +7850,7 @@ async fn linked_hosts(state: &AppRouterState) -> Vec<(String, serde_json::Value)
             ));
         }
     }
-    if let Some(links) = &state.links {
+    if let Some(links) = state.links() {
         for accepted in links.of("_") {
             linked.push((
                 accepted.name.clone(),
@@ -7842,7 +7904,7 @@ fn linked_named(
     state: &AppRouterState,
     name: &str,
 ) -> Option<Result<crate::link::Linked, Box<Response>>> {
-    let links = state.links.as_ref()?;
+    let links = state.links()?;
     let found = owner_key().and_then(|user| links.get(&user, name));
     Some(found.ok_or_else(|| {
         Box::new(
@@ -8007,7 +8069,7 @@ async fn get_link_info(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let Some(info) = &state.link_info else {
+    let Some(info) = state.link_info() else {
         return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
     };
     let mut info = info.clone();
@@ -8025,7 +8087,7 @@ async fn get_link_info(
                 .map_or(host, |(name, _)| name)
                 .to_string(),
         };
-        info.ssh = format!("{name}:{}", state.link_port);
+        info.ssh = format!("{name}:{}", state.link_port());
     }
     Json(info).into_response()
 }
@@ -8049,8 +8111,7 @@ async fn get_keys(State(state): State<AppRouterState>) -> Response {
         Err(refused) => return *refused,
     };
     let links = state
-        .links
-        .as_ref()
+        .links()
         .map(|links| links.of(&user))
         .unwrap_or_default();
     match users.keys_of(&user) {
@@ -8061,7 +8122,7 @@ async fn get_keys(State(state): State<AppRouterState>) -> Response {
                 "key": linked.key,
                 "since": linked.since,
             })).collect::<Vec<_>>(),
-            "accepts": state.link_info.is_some(),
+            "accepts": state.link_info().is_some(),
         }))
         .into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -8478,9 +8539,9 @@ async fn peers_view(state: &AppRouterState) -> Response {
         false => state.peers.identity().ok(),
     };
     // Links this luu accepts: where, with which key, and who is linked in now.
-    let listening = state.link_info.as_ref().map(|info| {
+    let listening = state.link_info().map(|info| {
         serde_json::json!({
-            "port": state.link_port,
+            "port": state.link_port(),
             "host_key": info.host_key,
             "fingerprint": crate::link::parse_public(&info.host_key)
                 .map(|key| crate::link::fingerprint(&key))
@@ -8488,8 +8549,8 @@ async fn peers_view(state: &AppRouterState) -> Response {
         })
     });
     let accepted: serde_json::Map<String, serde_json::Value> = state
-        .links
-        .iter()
+        .links()
+        .into_iter()
         .flat_map(|links| links.of("_"))
         .map(|linked| {
             (
@@ -8543,8 +8604,75 @@ async fn put_peers(State(state): State<AppRouterState>, Json(edit): Json<PeersEd
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     state.peers.restart(&edit.peers);
-    if let Some(keys) = &state.keys {
+    if let Some(keys) = state.keys() {
         keys.set(&edit.peers);
+    }
+    peers_view(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct ListenAsk {
+    /// Where to take links, as `[server] ssh` says it: `0.0.0.0:2222`.
+    ssh: String,
+}
+
+/// Starts taking links on `ssh` now, and writes `[server] ssh` so the next
+/// `serve` does too. Started first: an address that cannot be bound is said
+/// and nothing is written. A luu already listening keeps its port — moving it
+/// would drop every luu linked in — and says so. Row 72(a).
+async fn post_peers_listen(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<ListenAsk>,
+) -> Response {
+    if let Err(refused) = peers_allowed(&state) {
+        return *refused;
+    }
+    let ssh = asked.ssh.trim().to_string();
+    if ssh.parse::<std::net::SocketAddr>().is_err() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{ssh} is not an address and port, such as 0.0.0.0:2222"),
+        )
+            .into_response();
+    }
+    if state.link_info().is_some() {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "this luu already takes links on port {}: a new one is read when luu serve starts",
+                state.link_port()
+            ),
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory to write config.toml in",
+        )
+            .into_response();
+    };
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let server = current.server().clone();
+    if let Err(error) = start_links(&state, &ssh, server.ssh_public.clone()).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")).into_response();
+    }
+    if state.users.is_some() {
+        start_relay(&state).await;
+    }
+    let server = crate::provider::Server {
+        ssh: Some(ssh),
+        ..server
+    };
+    if let Err(error) = write_config(current.with_server(server), path).await {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("taking links now, but config.toml was not written: {error}"),
+        )
+            .into_response();
     }
     peers_view(&state).await
 }
@@ -8811,11 +8939,21 @@ async fn infer_pass(
         )
             .into_response();
     }
+    // Read whole before anything is sent: the model it names is what an engine
+    // is started on, the way a local session's choice moves one. A model call
+    // is JSON and far under the cap.
+    let (parts, body) = request.into_parts();
+    let body = match axum::body::to_bytes(body, INFER_BODY_LIMIT).await {
+        Ok(body) => body,
+        Err(error) => return (StatusCode::PAYLOAD_TOO_LARGE, error.to_string()).into_response(),
+    };
+    let named = engine_model_named(&config, &name, &body);
     let resolved = match crate::provider::resolve(
         &config,
         path.as_deref(),
         crate::provider::Flags {
             provider: Some(&name),
+            model: named.as_deref(),
             ..Default::default()
         },
     ) {
@@ -8842,13 +8980,12 @@ async fn infer_pass(
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
         }
     };
-    let query = request
-        .uri()
+    let query = parts
+        .uri
         .query()
         .map(|query| format!("?{query}"))
         .unwrap_or_default();
     let target = format!("{}/{rest}{query}", url.trim_end_matches('/'));
-    let (parts, body) = request.into_parts();
     let mut asked = infer_client().request(parts.method, target);
     for (header_name, value) in &parts.headers {
         if !crate::hosts::NOT_FORWARDED.contains(header_name) && header_name.as_str() != "x-api-key"
@@ -8862,7 +8999,7 @@ async fn infer_pass(
             _ => asked.bearer_auth(key),
         };
     }
-    asked = asked.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    asked = asked.body(body);
     let answer = match asked.send().await {
         Ok(answer) => answer,
         Err(error) => {
@@ -8880,6 +9017,33 @@ async fn infer_pass(
         .unwrap_or_else(|error| (StatusCode::BAD_GATEWAY, error.to_string()).into_response())
 }
 
+/// The most a linked request's body may be: a model call with a long history
+/// is a few megabytes of JSON.
+const INFER_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// The model a linked request names, when the provider's engine may be moved
+/// onto it: a reference into this machine's catalog for llama.cpp and mlx, a
+/// Strata id for Strata, and one the profile has not switched off. Anything
+/// else is `None`, and the engine stays on the table's model — the request
+/// still goes through, as it did before. Row 72(b); see
+/// `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+fn engine_model_named(
+    config: &crate::provider::Config,
+    provider: &str,
+    body: &[u8],
+) -> Option<String> {
+    let profile = config.profiles().get(provider)?;
+    let engine = config.engines().get(profile.engine.as_deref()?)?;
+    let asked: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let model = asked.get("model")?.as_str()?.trim();
+    let fits = match engine.kind {
+        crate::provider::EngineKind::Strata => strata_id(model),
+        crate::provider::EngineKind::Ollama => false,
+        _ => crate::models::is_reference(model),
+    };
+    (fits && profile.offers(model)).then(|| model.to_string())
+}
+
 /// The providers linked luus offer this person, by `<provider>@<peer>`: the
 /// peers this luu dials that are connected, or, on a server with users, the
 /// luus their keys linked. Asked of each at once, a slow one cut at 3 s.
@@ -8887,7 +9051,7 @@ async fn linked_offers(
     state: &AppRouterState,
 ) -> std::collections::BTreeMap<String, serde_json::Value> {
     let owner = owner_key();
-    let peers: Vec<String> = match (&state.links, &owner) {
+    let peers: Vec<String> = match (state.links(), &owner) {
         (Some(links), Some(user)) => links
             .of(user)
             .into_iter()
@@ -8901,8 +9065,8 @@ async fn linked_offers(
             .map(|(name, _)| name)
             .chain(
                 state
-                    .links
-                    .iter()
+                    .links()
+                    .into_iter()
                     .flat_map(|links| links.of("_"))
                     .map(|linked| linked.name),
             )
@@ -15211,6 +15375,63 @@ mod tests {
             session.narrowed.as_ref().is_some_and(|(id, _)| *id == 2),
             "the sandbox narrows at the approval, and only there",
         );
+    }
+
+    /// Row 72(b): what a linked request's `model` may move an engine onto.
+    #[test]
+    fn a_linked_request_names_the_model_its_engine_loads_and_nothing_else() {
+        let config = crate::provider::Config::from_toml(
+            "[engine.gemma]\nkind = \"llama\"\nmodel = \"luu:first.gguf\"\n\n\
+             [engine.st]\nkind = \"strata\"\n\n\
+             [engine.ol]\nkind = \"ollama\"\n\n\
+             [provider.gpu]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:8080/v1\"\n\
+             model = \"luu:first.gguf\"\nengine = \"gemma\"\n\n\
+             [provider.gpu.models.\"luu:off.gguf\"]\nenabled = false\n\n\
+             [provider.fast]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:8090/v1\"\n\
+             model = \"qwen-flash\"\nengine = \"st\"\n\n\
+             [provider.ol]\nbackend = \"ollama\"\nurl = \"http://127.0.0.1:11434\"\n\
+             model = \"qwen\"\nengine = \"ol\"\n\n\
+             [provider.api]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"x\"\n",
+            "/config.toml",
+        )
+        .unwrap();
+        let asks = |provider: &str, model: &str| {
+            engine_model_named(
+                &config,
+                provider,
+                serde_json::json!({ "model": model, "messages": [] })
+                    .to_string()
+                    .as_bytes(),
+            )
+        };
+        assert_eq!(
+            asks("gpu", "luu:second.gguf").as_deref(),
+            Some("luu:second.gguf")
+        );
+        assert_eq!(
+            asks("gpu", " luu:second.gguf ").as_deref(),
+            Some("luu:second.gguf")
+        );
+        assert_eq!(
+            asks("gpu", "gpt-4o"),
+            None,
+            "not a reference: the table's model"
+        );
+        assert_eq!(
+            asks("gpu", "luu:off.gguf"),
+            None,
+            "switched off on the profile"
+        );
+        assert_eq!(asks("fast", "ds-big").as_deref(), Some("ds-big"));
+        assert_eq!(asks("fast", "../etc"), None, "not a Strata id");
+        assert_eq!(
+            asks("ol", "luu:second.gguf"),
+            None,
+            "Ollama serves every model it has"
+        );
+        assert_eq!(asks("api", "luu:second.gguf"), None, "no engine to move");
+        assert_eq!(asks("nobody", "luu:second.gguf"), None);
+        assert_eq!(engine_model_named(&config, "gpu", b"not json"), None);
     }
 
     /// Row 43: what holds a turn is one decision, and an approved job that

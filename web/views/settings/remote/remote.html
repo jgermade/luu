@@ -91,6 +91,16 @@
     await save({ ...view.peers, [name]: { ...had, key: allowKey.trim(), may: had.may || ["sessions"], dial: had.dial ?? false } })
     if (!error) { allowName = ""; allowKey = "" }
   }
+  // Taking links, from here: started now, and written for the next start.
+  // It used to say *restart luu serve*. Row 72(a).
+  let listenAt = "0.0.0.0:2222"
+  let listening = false
+  const listen = async () => {
+    listening = true
+    const asked = await remote.listenPeers(listenAt.trim())
+    if (asked.ok) { view = asked.view; error = "" } else error = asked.error
+    listening = false
+  }
   const shortKey = key => {
     const [kind, body, comment] = (key || "").split(" ")
     return comment || (body ? `${kind} …${body.slice(-8)}` : "")
@@ -266,9 +276,16 @@
     one's page, and this one opens its page, under <strong>/h/&lt;name&gt;/</strong>.
   </p>
   <p class="note" :if="!view.listening">
-    This luu takes no links: set <code>[server] ssh = "0.0.0.0:2222"</code> in
-    <code>config.toml</code> and restart <code>luu serve</code>. The luus below are let in once it does.
+    This luu takes no links yet. Take them on an address and port: it starts
+    now, and <code>[server] ssh</code> is written so it does again when
+    <code>luu serve</code> starts. The luus below are let in once it does.
   </p>
+  <div class="inline" :if="!view.listening">
+    <input placeholder="0.0.0.0:2222" aria-label="Take links on" :value="listenAt"
+           @input="listenAt = $event.target.value" :disabled="!view.editable">
+    <button type="button" class="primary" :disabled="!listenAt.trim() || listening || !view.editable" @click="listen()">
+      {{ listening ? "Starting…" : "Take links" }}</button>
+  </div>
   <ul class="rows peers" :if="allowed.length">
     <li :each="peer in allowed" class="peer">
       <div class="peer-head">

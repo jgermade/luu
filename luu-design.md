@@ -3222,6 +3222,11 @@ luu user key add ana@example.com "$(luu link key)"  # online, or Account → Key
   from `luu config server`, and read only on a server with users. Its own
   port, because an Ingress or Caddy carries HTTP only. The chart gives it a
   Service, and compose publishes it.
+  **Read when `serve` starts, or started later from Remote access** (*Take
+  links*, `POST /api/peers/listen`), which binds it at once and writes the
+  table; once listening, the port stays for the life of `serve`, since moving
+  it would drop every link
+  ([`RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`](RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md)).
 - **The online side.** A key's `tcpip-forward` registers its user and its
   name (the SSH user), and a newer link with the same pair replaces the older
   at once. `/h/<name>/api/*` and `/h/<name>/ws*` go over one
@@ -3262,6 +3267,10 @@ exact name wins.
   `GET /api/infer` (what it offers: backend, model, window, transport),
   `GET /api/infer/<p>/models`, and `/api/infer/<p>/to/<path>`, which passes a
   request to that provider's own URL with its engine started and its key added.
+  **The engine is started on the model the request names**, as a session's
+  choice moves it at home: a catalog reference for llama.cpp and mlx, a Strata
+  id for Strata, and one the profile has not switched off; anything else
+  leaves it on the table's model.
 - **It offers everything a session there can use**, less a provider with
   `offer = false`: a switch in Remote access at home, the file on a server.
 - **Who reaches it.**
