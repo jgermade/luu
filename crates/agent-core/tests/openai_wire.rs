@@ -51,52 +51,73 @@ const SSE_WITHOUT_USAGE: &str = concat!(
 /// share a runner — and answers the first request with `body`, handing back the
 /// request line, the headers and the JSON it was sent.
 async fn stub(sse: &'static str) -> (SocketAddr, JoinHandle<(String, serde_json::Value)>) {
+    let (address, served) = stub_each(vec![sse]).await;
+    let first = tokio::spawn(async move {
+        served
+            .await
+            .expect("the stub server")
+            .pop()
+            .expect("one request")
+    });
+    (address, first)
+}
+
+/// The same for several requests, one connection each, answered in order:
+/// what a backend that remembers something between two calls is tested with.
+async fn stub_each(
+    sses: Vec<&'static str>,
+) -> (SocketAddr, JoinHandle<Vec<(String, serde_json::Value)>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("binding");
     let address = listener.local_addr().expect("the bound address");
 
     let served = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("a connection");
-        let mut raw: Vec<u8> = Vec::new();
+        let mut asked = Vec::new();
+        for sse in sses {
+            let (mut socket, _) = listener.accept().await.expect("a connection");
+            let mut raw: Vec<u8> = Vec::new();
 
-        let head = loop {
-            let mut buf = [0u8; 1024];
-            let read = socket.read(&mut buf).await.expect("reading the request");
-            assert!(read > 0, "the client closed before sending a request");
-            raw.extend_from_slice(&buf[..read]);
-            if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                break at + 4;
+            let head = loop {
+                let mut buf = [0u8; 1024];
+                let read = socket.read(&mut buf).await.expect("reading the request");
+                assert!(read > 0, "the client closed before sending a request");
+                raw.extend_from_slice(&buf[..read]);
+                if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break at + 4;
+                }
+            };
+
+            let head_text = String::from_utf8_lossy(&raw[..head]).to_string();
+            let length: usize = head_text
+                .to_lowercase()
+                .split("content-length:")
+                .nth(1)
+                .and_then(|rest| rest.split("\r\n").next())
+                .map(|value| value.trim().parse().expect("a numeric content-length"))
+                .expect("a content-length on the request");
+
+            while raw.len() < head + length {
+                let mut buf = [0u8; 1024];
+                let read = socket.read(&mut buf).await.expect("reading the body");
+                assert!(read > 0, "the body ended early");
+                raw.extend_from_slice(&buf[..read]);
             }
-        };
 
-        let head_text = String::from_utf8_lossy(&raw[..head]).to_string();
-        let length: usize = head_text
-            .to_lowercase()
-            .split("content-length:")
-            .nth(1)
-            .and_then(|rest| rest.split("\r\n").next())
-            .map(|value| value.trim().parse().expect("a numeric content-length"))
-            .expect("a content-length on the request");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+                sse.len(),
+                sse,
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writing the response");
+            socket.shutdown().await.expect("closing");
 
-        while raw.len() < head + length {
-            let mut buf = [0u8; 1024];
-            let read = socket.read(&mut buf).await.expect("reading the body");
-            assert!(read > 0, "the body ended early");
-            raw.extend_from_slice(&buf[..read]);
+            let body =
+                serde_json::from_slice(&raw[head..head + length]).expect("a JSON request body");
+            asked.push((head_text, body));
         }
-
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
-            sse.len(),
-            sse,
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("writing the response");
-        socket.shutdown().await.expect("closing");
-
-        let body = serde_json::from_slice(&raw[head..head + length]).expect("a JSON request body");
-        (head_text, body)
+        asked
     });
 
     (address, served)
@@ -471,4 +492,83 @@ async fn the_facts_are_what_the_server_says_and_no_more() {
         .await
         .unwrap();
     assert!(facts.is_empty());
+}
+
+/// Alibaba Cloud's compatible mode, as it streams a thinking model: a role
+/// event with both fields empty, the reasoning in `reasoning_content` with
+/// `content` null, then the answer. DeepSeek's and vLLM's are the same shape.
+const SSE_REASONING: &str = concat!(
+    "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\"},\"index\":0}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":\"they \"},\"index\":0}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{\"content\":null,\"reasoning_content\":\"greet\"},\"index\":0}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{\"content\":\"Hola.\"},\"index\":0}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{},\"index\":0,\"finish_reason\":\"stop\"}]}\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// The reasoning comes up as `<think>…</think>`, as every other model's does;
+/// an earlier answer another provider wrote goes to this one without its
+/// thinking; and this backend's own answer goes back with it, so a model
+/// that thinks between calls is shown its own reasoning. See
+/// `RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md`.
+#[tokio::test]
+async fn reasoning_comes_up_as_think_and_goes_back_only_where_it_was_written() {
+    let (address, served) = stub_each(vec![SSE_REASONING, SSE]).await;
+    let backend = OpenAi::new(format!("http://{address}/v1"));
+    let collect = |chunks: Vec<Chunk>| -> String {
+        chunks
+            .into_iter()
+            .filter_map(|chunk| match chunk {
+                Chunk::Text(text) => Some(text),
+                Chunk::Done { .. } => None,
+            })
+            .collect()
+    };
+
+    // Before the switch, another provider answered with its thinking inline.
+    let foreign = "<think>pensando en MiniMax</think>\n\nRespuesta de MiniMax.";
+    let mut first = request();
+    first.model = "qwen3-max".into();
+    first.messages = vec![
+        Message::system("you are luu"),
+        Message::user("primera"),
+        Message::assistant(foreign),
+        Message::user("segunda"),
+    ];
+    let mut chunks = Vec::new();
+    let mut stream = backend.stream(first.clone());
+    while let Some(chunk) = stream.next().await {
+        chunks.push(chunk.expect("a chunk"));
+    }
+    drop(stream);
+    let said = collect(chunks);
+    assert_eq!(said, "<think>they greet</think>\n\nHola.");
+
+    // The next call carries both answers: its own as it came, the other's
+    // without the thinking.
+    let mut second = first.clone();
+    second.messages.push(Message::assistant(said.clone()));
+    second.messages.push(Message::user("tercera"));
+    let mut stream = backend.stream(second);
+    while stream.next().await.is_some() {}
+    drop(stream);
+
+    let asked = served.await.expect("the stub server");
+    let assistants = |body: &serde_json::Value| -> Vec<String> {
+        body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|m| m["role"] == "assistant")
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert_eq!(assistants(&asked[0].1), ["Respuesta de MiniMax."]);
+    assert_eq!(
+        assistants(&asked[1].1),
+        [
+            "Respuesta de MiniMax.",
+            "<think>they greet</think>\n\nHola."
+        ]
+    );
 }

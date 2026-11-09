@@ -2570,6 +2570,19 @@ report none even then. `None` is *not reported*; zero would claim the server saw
 an empty prompt, in exactly the number the budget panel plots against ours. See
 [`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
 
+**Reasoning in a field of its own streams up as `<think>…</think>`** on the
+`openai` backend too — `delta.reasoning_content` (DeepSeek, Alibaba Cloud's
+compatible mode, vLLM) or `delta.reasoning` (OpenRouter, llama-server) — so it is
+masked and folded like every other model's. And **a reply's thinking goes back
+only to the destination that wrote it**: the backend remembers the replies with
+thinking it streamed (a hash of the model and the text, 4096 of them, per backend,
+so per destination), sends those back as they came — interleaved thinking on every
+step of a tool loop, and `<think>` inline in `content` as MiniMax's API returns it —
+and cuts the thinking out of any other: another provider's before a switch, or a
+reply luu edited. One left empty is dropped and the prompts around it joined, so the
+roles still alternate. See
+[`RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md`](RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md).
+
 ### The Anthropic-compatible backend, and the thinking it keeps
 
 **A third is built**: `anthropic` (`POST /v1/messages`, SSE), for Anthropic's own
