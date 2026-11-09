@@ -72,8 +72,11 @@ the title. Its items are its doors, each with a line under it on what it does:
 until 2026-10-27).
 
 **And the page reads the alternation, on both surfaces.** A fold says which
-half it was — *draft 3* or *job 4*, from the same `!plan` rule the open job's
-menu uses — and why it ended, which is now three rungs and not two:
+half it was — *draft 3* or *job 4*, from the same rule the open job's menu
+uses: no plan **and** nobody approved it, since a recording written before
+2026-08-30 approved jobs with no plan on the line
+([`RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md`](RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md))
+— and why it ended, which is now three rungs and not two:
 `ClosedBy::Approval` beside `User` and `ExitCode`, because under the alternation
 most drafts end by having a plan approved out of them and a recording that
 called that *a person folded it* could not count either. `protocol::VERSION` 8

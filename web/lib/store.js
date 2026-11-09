@@ -312,6 +312,9 @@ function onProtocol(message) {
         // plan is the *strictest* one there is, and the panel that drew it as
         // "grants nothing" would be right about a job and wrong about this.
         plan: null,
+        // Nobody approved it. Said here rather than left to a missing plan:
+        // see `job_approved` below.
+        approved: false,
         proposed: null,
         source: null,
         state: "open",
@@ -391,8 +394,8 @@ function onProtocol(message) {
       // patch it where it does; otherwise this line is the job's birth.
       if (state.jobs.some(job => job.id === id)) {
         patchJob(id, message.plan
-          ? { state: "open", plan: message.plan }
-          : { state: "open" })
+          ? { state: "open", plan: message.plan, approved: true }
+          : { state: "open", approved: true })
         break
       }
       state.jobs = [...state.jobs, {
@@ -403,6 +406,12 @@ function onProtocol(message) {
         // The plan as approved, which is what the job's sandbox is built from —
         // the person at the gate may have added what the model forgot.
         plan: message.plan ?? null,
+        // Approved, whatever the line carried. A recording written before
+        // 2026-08-30 approved with no plan on this line, and a job is a draft
+        // because nobody approved it, not because its plan is missing: the
+        // `!plan` rule alone read those jobs as drafts. See
+        // `RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md`.
+        approved: true,
         // Kept beside it: the difference between the two is what a person had
         // to add, which is the cost of the gate.
         proposed: offered ? offered.plan : null,
@@ -1375,6 +1384,8 @@ export async function refreshLiveSession() {
       state: j.state,
       summary: j.summary,
       closedBy: j.closed_by || null,
+      // The view says who approved it; a draft has nobody.
+      approved: !!j.approved_by || !!j.plan,
       replaced: j.replaced || null,
     }))
     state.tasks = state.jobs

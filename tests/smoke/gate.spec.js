@@ -1814,3 +1814,32 @@ test("a short desktop window is not a phone", async ({ page }) => {
   await chooseFolder(page)
   await expect(page.locator(".app")).not.toHaveAttribute("data-columns", "slides")
 })
+
+/**
+ * Row 45: a recording written before 2026-08-30 approved a job with no plan on
+ * `task_approved`. The page called a job with no plan a draft, so that job read
+ * as exploration nobody approved. Replayed from the page's own `?replay=`, with
+ * the file served by the test: there is no such recording on disk.
+ * See `RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md`.
+ */
+test("a job approved before the plan was on the line is not a draft", async ({ page }) => {
+  const lines = [
+    { channel: "header", format: 1, protocol: 1, backend: "mock", model: "mock" },
+    { channel: "protocol", at_ms: 0, message: {
+      type: "task_proposed", task: 1, objective: "an old job",
+      plan: { files: ["AGENTS.md"], commands: [] } } },
+    { channel: "protocol", at_ms: 1, message: { type: "task_approved", task: 1 } },
+  ]
+  await page.route("**/old-approval.jsonl", route => route.fulfill({
+    contentType: "application/x-ndjson",
+    body: lines.map(line => JSON.stringify(line)).join("\n") + "\n",
+  }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html?replay=old-approval.jsonl`)
+  await chooseFolder(page)
+
+  const live = page.locator(".chat .col-head .job-menu")
+  await expect(live).toBeVisible({ timeout: 15_000 })
+  await expect(live.locator("button.trigger")).toHaveText("plan")
+  await expect(live.locator("button.trigger")).toHaveAttribute("title", /^job 1 · an old job/)
+})

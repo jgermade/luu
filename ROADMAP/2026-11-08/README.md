@@ -104,13 +104,13 @@ Every run is on a server started with one slot (`-np 1`), for the reason
 | 30 | **Whether a draft's fold is worth its summary** | a design argument | [`every-turn-belongs-to-a-job`](../../RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md) §Still open |
 | 28 | **The two keys by content, and the migration they cost**. Ordered, not scheduled | rule A reaching more than spans | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §sixth, §eleventh |
 
-**Section C — the gate.** ~~43 still leads, because it may be a sandbox defect.~~ 43 was one, though not the one it named: [`one-site-chooses-what-holds-a-turn`](../../RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md). 44 led next, and is done too; 45 leads now.
+**Section C — the gate.** ~~43 still leads, because it may be a sandbox defect.~~ 43 was one, though not the one it named: [`one-site-chooses-what-holds-a-turn`](../../RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md). 44 and 45 followed it the same day; 12 is what is left, and waits on its field.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | ~~43~~ | ~~**The two sites that choose the floor decide differently**: `begin_turn` trusts `session.narrowed`, while `start_turn` checks it against the live job. The next move is a test that tries. Several live sessions (row 14, closed) make it worth trying sooner~~ *Done 2026-11-09*: one function for both. The stale narrowing has no path; what the test found instead is an approved job whose plan stopped resolving ran on the floor, and now runs on nothing | ~~nothing~~ | [`what-an-unapproved-turn-may-reach`](../../RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md) §1 |
 | ~~44~~ | ~~**The floor is shown only at the gate**~~ *Done 2026-11-09*: the head's job menu opens on *What it may do* — the floor for a draft, the plan for a job — [`what-a-draft-may-reach-without-a-gate`](../../RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md) | ~~nothing~~ | the same, §Still open |
-| 45 | **A pre-alternation recording reads an approved job as a draft** | nothing | [`the-alternation-on-the-page`](../../RECORD/2026-09-21.the-alternation-on-the-page.completed.md) §Still open |
+| ~~45~~ | ~~**A pre-alternation recording reads an approved job as a draft**~~ *Done 2026-11-09*: a job is a draft when it has no plan **and** nobody approved it — [`an-approval-without-a-plan-is-not-a-draft`](../../RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md) | ~~nothing~~ | [`the-alternation-on-the-page`](../../RECORD/2026-09-21.the-alternation-on-the-page.completed.md) §Still open |
 | 12 | **Grants are counted as path strings and not as kinds**: closed by a field written at approval | the field | [`one-counting-surface`](../../RECORD/2026-09-19.one-counting-surface.completed.md) |
 
 **Section D — wants an argument before it wants a commit.** Row 14 left this
@@ -175,7 +175,7 @@ gantt
     section C — the gate
     Two sites choose the floor (done)      :done, sites, 2026-11-09, 1d
     The floor while drafting (done)        :done, floor, after sites, 1d
-    Pre-alternation job read as draft      :prealt, after floor, 1d
+    Pre-alternation job read as draft (done) :done, prealt, after floor, 1d
     section F — the public luu
     Links leftovers a and b                :links, 2026-11-10, 2d
     A second local model, warned           :mem, after links, 1d
