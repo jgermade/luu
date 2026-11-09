@@ -2252,7 +2252,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // Other machines' `luu serve`, reached through this one: the list, and
         // everything a page served under `/h/<name>/` asks of its API. See
         // `crate::hosts`, and [`hosts_allowed`] for who may.
-        .route("/api/hosts", get(get_hosts).put(put_hosts))
+        .route("/api/hosts", get(get_hosts))
         // Links, by key. A user's keys, on a server with users; the luus this
         // one dials, on this machine. See `crate::link`.
         .route("/api/auth/keys", get(get_keys).post(post_key))
@@ -7690,9 +7690,10 @@ async fn put_default_runtime(
 
 /// Whether this request may reach a host, or write the list of them.
 ///
-/// [`engines_allowed`]'s rule, and for its reason: a host is reached with its
-/// token, which carries its approvals, its engines and its terminal. Off
-/// loopback, this server's token would hand all of that to whoever holds it.
+/// [`engines_allowed`]'s rule, and for its reason: a linked luu is reached
+/// with this machine's key, under what it lets this machine do — its
+/// sessions, maybe its terminal. Off loopback, this server's token would hand
+/// that to whoever holds it.
 /// And **an `Origin`, when one is sent, is this server**: a page on another
 /// site cannot read a cross-origin answer, but it can send a `POST`, and
 /// through here that would be a `POST` to the host.
@@ -7703,8 +7704,8 @@ fn hosts_allowed(
     let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
     if !state.providers_editable {
         return Err(refuse(
-            "this server is bound off loopback, and a host is reached with its own token. \
-             Reach it from a browser on this machine."
+            "this server is bound off loopback, and a linked luu is reached with this \
+             machine's key. Reach it from a browser on this machine."
                 .to_string(),
         ));
     }
@@ -7738,25 +7739,6 @@ fn accepted_link(state: &AppRouterState, name: &str) -> Option<crate::link::Link
     state.links()?.get("_", name)
 }
 
-/// One `[host.<name>]`, or the answer that says it is not there.
-async fn host_named(name: &str) -> Result<crate::provider::Host, Box<Response>> {
-    let config = load_config()
-        .await
-        .map(|(config, _)| config)
-        .map_err(|error| {
-            Box::new((StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response())
-        })?;
-    config.hosts().get(name).cloned().ok_or_else(|| {
-        Box::new(
-            (
-                StatusCode::NOT_FOUND,
-                format!("there is no [host.{name}] in config.toml"),
-            )
-                .into_response(),
-        )
-    })
-}
-
 /// What follows `/h/<name>` in the request, query included.
 fn host_rest(uri: &Uri, name: &str) -> String {
     let path = uri.path();
@@ -7770,27 +7752,9 @@ fn host_rest(uri: &Uri, name: &str) -> String {
     }
 }
 
-#[derive(serde::Serialize)]
-struct HostsView {
-    hosts: std::collections::BTreeMap<String, crate::provider::Host>,
-    /// Whether this server may reach or write them; see [`hosts_allowed`].
-    editable: bool,
-    /// The file they are in, or would be written to.
-    path: Option<String>,
-}
-
-async fn hosts_view(state: &AppRouterState) -> Result<HostsView, crate::provider::ConfigError> {
-    let (config, loaded) = load_config().await?;
-    Ok(HostsView {
-        hosts: config.hosts().clone(),
-        editable: state.providers_editable,
-        path: shown_path(loaded).await,
-    })
-}
-
 async fn get_hosts(State(state): State<AppRouterState>) -> Response {
     // On a server with users, a user's hosts are the luus they linked, and
-    // nobody else's: `[host.*]` is the machine's, with its token paths.
+    // nobody else's.
     if state.users.is_some() {
         let mine = match (state.links(), owner_key()) {
             (Some(links), Some(user)) => links.of(&user),
@@ -7812,21 +7776,18 @@ async fn get_hosts(State(state): State<AppRouterState>) -> Response {
         return Json(serde_json::json!({ "hosts": hosts, "editable": false, "path": null }))
             .into_response();
     }
-    match hosts_view(&state).await {
-        Ok(view) => {
-            let mut view = serde_json::to_value(view).unwrap_or_default();
-            if let Some(hosts) = view
-                .get_mut("hosts")
-                .and_then(|hosts| hosts.as_object_mut())
-            {
-                for (name, entry) in linked_hosts(&state).await {
-                    hosts.insert(name, entry);
-                }
-            }
-            Json(view).into_response()
-        }
-        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
-    }
+    // The luus linked by key, which are every other luu this page can open
+    // since `[host.*]` was removed. Read only: a link is made in Remote access.
+    let hosts: serde_json::Map<String, serde_json::Value> =
+        linked_hosts(&state).await.into_iter().collect();
+    // `editable` is whether this page may go and make one: Remote access is
+    // this machine's to write, as the hosts it replaced were.
+    Json(serde_json::json!({
+        "hosts": hosts,
+        "editable": state.providers_editable,
+        "path": null,
+    }))
+    .into_response()
 }
 
 /// The luus linked by key that this page can open, as the project modal
@@ -7863,38 +7824,6 @@ async fn linked_hosts(state: &AppRouterState) -> Vec<(String, serde_json::Value)
         }
     }
     linked
-}
-
-#[derive(serde::Deserialize)]
-struct HostsEdit {
-    hosts: std::collections::BTreeMap<String, crate::provider::Host>,
-}
-
-/// Replaces every `[host.*]`, and nothing else in the file.
-async fn put_hosts(
-    State(state): State<AppRouterState>,
-    headers: axum::http::HeaderMap,
-    Json(edit): Json<HostsEdit>,
-) -> Response {
-    if let Err(refused) = hosts_allowed(&state, &headers) {
-        return *refused;
-    }
-    let Some(path) = config_path().await else {
-        return (
-            StatusCode::CONFLICT,
-            "this machine has no state directory yet, so there is nowhere to write config.toml. \
-             Run luu once on a terminal, or set LUU_HOME.",
-        )
-            .into_response();
-    };
-    let current = load_config()
-        .await
-        .map(|(config, _)| config)
-        .unwrap_or_default();
-    if let Err(error) = write_config(current.with_hosts(edit.hosts), path).await {
-        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
-    }
-    get_hosts(State(state)).await
 }
 
 /// A request the page made of a host's API, forwarded.
@@ -7952,13 +7881,16 @@ async fn host_api(
         let (parts, body) = request.into_parts();
         return crate::link::forward(&linked, parts.method, &rest, &parts.headers, body).await;
     }
-    let host = match host_named(&name).await {
-        Ok(host) => host,
-        Err(refused) => return *refused,
-    };
-    let rest = host_rest(request.uri(), &name);
-    let (parts, body) = request.into_parts();
-    crate::hosts::forward(&name, &host, parts.method, &rest, &parts.headers, body).await
+    no_link(&name)
+}
+
+/// A name no link answers to: the 404 every other way in gives.
+fn no_link(name: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        format!("no luu named {name} is linked now"),
+    )
+        .into_response()
 }
 
 /// A socket the page opened on a host, forwarded. **Same-origin only**, as
@@ -8024,19 +7956,7 @@ async fn host_socket(
             tracing::info!(target: "luu::ws", linked = name, "closed");
         });
     }
-    let host = match host_named(&name).await {
-        Ok(host) => host,
-        Err(refused) => return *refused,
-    };
-    let upstream = match crate::hosts::connect(&name, &host, &host_rest(&uri, &name)).await {
-        Ok(upstream) => upstream,
-        Err(refused) => return *refused,
-    };
-    ws.on_upgrade(move |socket| async move {
-        tracing::info!(target: "luu::ws", host = name, "forwarding");
-        crate::hosts::pipe(socket, upstream).await;
-        tracing::info!(target: "luu::ws", host = name, "closed");
-    })
+    no_link(&name)
 }
 
 /// `/h/<name>` without its slash: every relative URL on the page would

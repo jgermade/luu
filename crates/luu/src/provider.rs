@@ -512,9 +512,6 @@ struct File {
     /// `[auth]`: how a public server's logins behave. See [`AuthTable`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<AuthTable>,
-    /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    host: BTreeMap<String, Host>,
     /// `[peer.<name>]`: another luu this one links to, by key. See [`Peer`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     peer: BTreeMap<String, Peer>,
@@ -632,25 +629,6 @@ pub fn is_origin(origin: &str) -> bool {
         return false;
     };
     matches!(scheme, "http" | "https") && !rest.is_empty() && !rest.contains(['/', '?', '#', ' '])
-}
-
-/// `[host.<name>]`: another machine's `luu serve`, reached through this one.
-///
-/// The page asks for `/h/<name>/…` and this server forwards it to `url` with
-/// the token in `token-file` — so what the browser can reach is bounded by
-/// what somebody wrote here, and the token never reaches the page. A path and
-/// never a value, for the reason a provider's key is one. See
-/// `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Host {
-    /// Where its `luu serve` listens: `http://ryzen.local:7878`.
-    pub url: String,
-    /// The file holding the token that host was started with
-    /// (`--auth-token-file`). Absent for a host that asks for none, which is
-    /// one bound to loopback — another port on this machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_file: Option<PathBuf>,
 }
 
 /// `[peer.<name>]`: another luu this one links to, by key. Written by `luu
@@ -1008,7 +986,6 @@ pub struct Config {
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
-    hosts: BTreeMap<String, Host>,
     peers: BTreeMap<String, Peer>,
     server: Option<Server>,
     auth: Option<AuthTable>,
@@ -1090,12 +1067,6 @@ pub enum ConfigError {
         at: String,
         problem: String,
     },
-    #[error("{path}: [host.{name}]: {problem}")]
-    BadHost {
-        path: String,
-        name: String,
-        problem: String,
-    },
     #[error("-p {name} was named, and this machine has no {file}")]
     NoConfigFile { name: String, file: String },
 }
@@ -1153,7 +1124,6 @@ impl Config {
             resend: file.resend,
             authority: file.authority,
             engines: file.engine,
-            hosts: file.host,
             peers: file.peer,
             server: file.server,
             auth: file.auth,
@@ -1161,7 +1131,6 @@ impl Config {
         config.held = config.check_default(path)?;
         config.check_engines(path)?;
         config.check_messages(path)?;
-        config.check_hosts(path)?;
         config.check_peers(path)?;
         config.check_server(path)?;
         config.check_images(path)?;
@@ -1340,28 +1309,6 @@ impl Config {
         Ok(())
     }
 
-    /// A host's name fits in a URL's path segment, and its URL is HTTP: the
-    /// proxy forwards there, and a `file://` or a bare word is not a server.
-    fn check_hosts(&self, path: &str) -> Result<(), ConfigError> {
-        for (name, host) in &self.hosts {
-            let problem = if !is_host_name(name) {
-                Some("a host's name is letters, digits, `-` and `_`".to_string())
-            } else if !(host.url.starts_with("http://") || host.url.starts_with("https://")) {
-                Some(format!("url = \"{}\" is not http:// or https://", host.url))
-            } else {
-                None
-            };
-            if let Some(problem) = problem {
-                return Err(ConfigError::BadHost {
-                    path: path.to_string(),
-                    name: name.clone(),
-                    problem,
-                });
-            }
-        }
-        Ok(())
-    }
-
     /// The whole of the load-time rule, and it is about one profile: a default
     /// off this machine that does not say so is **held**, and the answer is
     /// which one. A `remote = true` on a default that is this machine is taken
@@ -1512,7 +1459,6 @@ impl Config {
             resend: self.resend,
             authority: self.authority.clone(),
             engine: self.engines.clone(),
-            host: self.hosts.clone(),
             peer: self.peers.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
@@ -1600,7 +1546,6 @@ impl Config {
             resend: self.resend,
             authority: self.authority.clone(),
             engines: self.engines.clone(),
-            hosts: self.hosts.clone(),
             peers: self.peers.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
@@ -1676,16 +1621,6 @@ impl Config {
         }
     }
 
-    /// The file as the project modal hands back the hosts: `[host.*]`, and
-    /// everything else this config already had, [`Config::with_resend`]'s
-    /// reason.
-    pub fn with_hosts(&self, hosts: BTreeMap<String, Host>) -> Self {
-        Self {
-            hosts,
-            ..self.clone()
-        }
-    }
-
     /// `[server]`, or every key absent.
     pub fn server(&self) -> Server {
         self.server.clone().unwrap_or_default()
@@ -1712,11 +1647,6 @@ impl Config {
             auth: (auth != AuthTable::default()).then_some(auth),
             ..self.clone()
         }
-    }
-
-    /// Every host the file names.
-    pub fn hosts(&self) -> &BTreeMap<String, Host> {
-        &self.hosts
     }
 
     /// Every luu this one links to.
@@ -2221,6 +2151,16 @@ mod tests {
 
     fn config(text: &str) -> Result<Config, ConfigError> {
         Config::from_toml(text, PATH)
+    }
+
+    /// `[host.*]` was removed with no compatibility (2026-11-09): a file that
+    /// still has one is refused like any table luu does not know.
+    #[test]
+    fn a_host_table_is_refused() {
+        assert!(
+            config("[host.casa]\nurl = \"http://casa:7878\"\n").is_err(),
+            "[host.*] loaded"
+        );
     }
 
     /// A profile's `engine` names a table the file has, or the file does not
@@ -2789,30 +2729,6 @@ mod tests {
         );
         assert_eq!(picked.kind, BackendKind::Openai);
         assert_eq!(picked.url, "https://openrouter.ai/api/v1");
-    }
-
-    #[test]
-    fn a_host_is_a_name_that_fits_a_path_and_an_http_url() {
-        let loaded =
-            config("[host.ryzen-box]\nurl = \"http://ryzen.local:7878\"\ntoken-file = \"~/t\"\n")
-                .expect("a host loads");
-        assert_eq!(loaded.hosts()["ryzen-box"].url, "http://ryzen.local:7878");
-        let again = Config::from_toml(&loaded.render().unwrap(), "config.toml").unwrap();
-        assert_eq!(
-            again.hosts(),
-            loaded.hosts(),
-            "written and read back unchanged"
-        );
-
-        for bad in [
-            "[host.\"a/b\"]\nurl = \"http://x\"\n",
-            "[host.x]\nurl = \"file:///etc\"\n",
-        ] {
-            assert!(
-                matches!(config(bad), Err(ConfigError::BadHost { .. })),
-                "{bad} loaded"
-            );
-        }
     }
 
     #[test]

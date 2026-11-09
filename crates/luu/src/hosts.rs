@@ -1,41 +1,18 @@
-//! Another machine's `luu serve`, reached through this one.
+//! What a page's request to another luu needs on its way through this one —
+//! the headers that stay on this hop, this server's token kept out of a
+//! forwarded query, and a socket carried both ways — shared by the links
+//! (`crate::link`) and the infer pass-through.
 //!
-//! The page asks for `/h/<name>/api/…` and `/h/<name>/ws…`, and this module
-//! forwards it to the URL `[host.<name>]` names in `config.toml`, with that
-//! host's token in the header. **This server keeps nothing**: the session is
-//! the host's, made and recorded there, which is what *a session stays on the
-//! host that made it* asks. What this adds is a browser that can reach a
-//! second server without a second tab and a pasted token.
-//!
-//! What bounds it:
-//!
-//! - **A name, never a URL.** The browser names a host; the URL is what
-//!   somebody wrote on this machine.
-//! - **The token is a file**, read by [`crate::secret::read`] with its mode
-//!   checked, and never sent to the page.
-//! - **This server's own `Authorization` and `?token=` are dropped** before
-//!   forwarding: this server's token is not the host's, and is none of its
-//!   business.
-//! - **Loopback only**, which `serve` decides: see `hosts_allowed` there.
-//!
-//! See `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
+//! It was `[host.<name>]`'s module: another `luu serve` reached by URL and a
+//! token in a file. That table was removed on 2026-11-09, once a link by key
+//! did everything it did; see
+//! `RECORD/2026-11-09.five-decisions.WIP.md` §72(c). What is left here is what
+//! both ever shared.
 
-use std::sync::OnceLock;
-use std::time::Duration;
-
-use axum::body::Body;
 use axum::extract::ws::{CloseFrame, Message as WsMessage, WebSocket};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::header;
 use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
-
-use crate::provider::Host;
-
-/// How long a host may take to accept a connection. Not a deadline on the
-/// answer: `/api/workspace/events` is a stream that never ends, and a model
-/// list can take as long as the provider behind it.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+use tokio_tungstenite::tungstenite;
 
 /// Request headers that are about *this* hop, or this server's own
 /// credential, and never forwarded.
@@ -58,41 +35,6 @@ pub(crate) const NOT_RETURNED: &[header::HeaderName] = &[
     header::CONTENT_LENGTH,
 ];
 
-fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            // A host is a name somebody wrote down; a redirect would be the
-            // host naming somewhere else, with the token attached.
-            .redirect(reqwest::redirect::Policy::none())
-            // Straight there, as the socket half goes: `tokio-tungstenite`
-            // does not read `HTTPS_PROXY`, and a host whose API went through a
-            // corporate proxy while its sockets did not would be one host
-            // reached two ways — on a LAN, one of them a way that cannot
-            // reach it at all.
-            .no_proxy()
-            .build()
-            .expect("an HTTP client with no TLS configuration to fail")
-    })
-}
-
-/// The host's token, when it names a file. Read on every request rather than
-/// once, so replacing the file is enough to rotate it.
-fn token(host: &Host) -> Result<Option<String>, String> {
-    let Some(path) = &host.token_file else {
-        return Ok(None);
-    };
-    let path = crate::provider::expand_home(path);
-    crate::secret::read(
-        &path,
-        "the host's token file",
-        "hands that host's approvals to anyone who can read it",
-    )
-    .map(Some)
-    .map_err(|error| format!("{error:#}"))
-}
-
 /// `rest` with this server's `token` taken out of its query, if it had one.
 pub(crate) fn without_token(rest: &str) -> String {
     let Some((path, query)) = rest.split_once('?') else {
@@ -108,137 +50,8 @@ pub(crate) fn without_token(rest: &str) -> String {
     }
 }
 
-/// The URL on the host for `rest`, which starts with `/`.
-fn target(host: &Host, rest: &str) -> String {
-    format!("{}{}", host.url.trim_end_matches('/'), without_token(rest))
-}
-
-/// An error and what caused it, down to the bottom: reqwest's own message is
-/// "error sending request", and "Connection refused" is two sources below it.
-fn chain(error: &dyn std::error::Error) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        let said = cause.to_string();
-        if !text.contains(&said) {
-            text = format!("{text}: {said}");
-        }
-        source = cause.source();
-    }
-    text
-}
-
-fn bad_gateway(name: &str, host: &Host, why: impl std::fmt::Display) -> Response {
-    (
-        StatusCode::BAD_GATEWAY,
-        format!("host {name} ({}): {why}", host.url),
-    )
-        .into_response()
-}
-
-/// One HTTP request, forwarded, and its answer streamed back as it comes —
-/// `events` is a stream that does not end, and an upload is not buffered.
-pub async fn forward(
-    name: &str,
-    host: &Host,
-    method: Method,
-    rest: &str,
-    headers: &HeaderMap,
-    body: Body,
-) -> Response {
-    let token = match token(host) {
-        Ok(token) => token,
-        Err(why) => return bad_gateway(name, host, why),
-    };
-    let mut asked = client().request(method, target(host, rest));
-    for (key, value) in headers {
-        if !NOT_FORWARDED.contains(key) {
-            asked = asked.header(key, value);
-        }
-    }
-    if let Some(token) = token {
-        asked = asked.bearer_auth(token);
-    }
-    asked = asked.body(reqwest::Body::wrap_stream(body.into_data_stream()));
-    let answer = match asked.send().await {
-        Ok(answer) => answer,
-        Err(error) => return bad_gateway(name, host, chain(&error)),
-    };
-    let mut response = Response::builder().status(answer.status().as_u16());
-    for (key, value) in answer.headers() {
-        if !NOT_RETURNED.contains(key) {
-            response = response.header(key.as_str(), value.as_bytes());
-        }
-    }
-    response
-        .body(Body::from_stream(answer.bytes_stream()))
-        .unwrap_or_else(|error| bad_gateway(name, host, error))
-}
-
-/// Opens the host's end of a socket, before this end is upgraded, so a host
-/// that refuses is a status and a sentence rather than a socket that opens and
-/// closes at once.
-pub async fn connect(name: &str, host: &Host, rest: &str) -> Result<Upstream, Box<Response>> {
-    let refuse = |why: String| Box::new(bad_gateway(name, host, why));
-    let token = token(host).map_err(refuse)?;
-    let url = target(host, rest);
-    let ws = match url.split_once("://") {
-        Some(("http", tail)) => format!("ws://{tail}"),
-        Some(("https", tail)) => format!("wss://{tail}"),
-        _ => return Err(refuse(format!("{url} is not http:// or https://"))),
-    };
-    let mut request = ws
-        .as_str()
-        .into_client_request()
-        .map_err(|error| refuse(error.to_string()))?;
-    // The host's terminal admits only a socket whose `Origin` is the host
-    // itself — its own page. Through here, that page is this server's, which
-    // `serve` has already checked is same-origin with *this* server.
-    let origin = host.url.trim_end_matches('/').to_string();
-    if let Ok(value) = HeaderValue::from_str(&origin) {
-        request.headers_mut().insert(header::ORIGIN, value);
-    }
-    if let Some(token) = token
-        && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
-    {
-        request.headers_mut().insert(header::AUTHORIZATION, value);
-    }
-    match tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(request)).await {
-        Ok(Ok((stream, _))) => Ok(Upstream(stream)),
-        Ok(Err(tungstenite::Error::Http(answer))) => {
-            let status = answer.status();
-            let body = answer
-                .body()
-                .as_deref()
-                .map(String::from_utf8_lossy)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            Err(Box::new(
-                (
-                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-                    format!("host {name}: {body}"),
-                )
-                    .into_response(),
-            ))
-        }
-        Ok(Err(error)) => Err(refuse(chain(&error))),
-        Err(_) => Err(refuse("no answer within 5 s".to_string())),
-    }
-}
-
-/// The host's end of a socket.
-pub struct Upstream(
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-);
-
-/// Carries frames both ways until either end closes.
-pub async fn pipe(socket: WebSocket, upstream: Upstream) {
-    pipe_to(socket, upstream.0).await
-}
-
-/// [`pipe`], to any socket's other end: a host's over TCP, or a linked luu's
-/// over a channel of its link.
+/// Carries frames both ways until either end closes: the page's socket and a
+/// linked luu's, over a channel of its link.
 pub async fn pipe_to<S>(socket: WebSocket, upstream: tokio_tungstenite::WebSocketStream<S>)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -307,17 +120,5 @@ mod tests {
             "/api/workspace/tree?path=a"
         );
         assert_eq!(without_token("/api/settings"), "/api/settings");
-    }
-
-    #[test]
-    fn the_url_is_the_hosts_and_the_path_is_the_pages() {
-        let host = Host {
-            url: "http://ryzen.local:7878/".into(),
-            token_file: None,
-        };
-        assert_eq!(
-            target(&host, "/api/settings?token=x"),
-            "http://ryzen.local:7878/api/settings"
-        );
     }
 }

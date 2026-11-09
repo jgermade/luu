@@ -405,7 +405,7 @@ Settings are written by role — what is shared inside luu (providers, policies,
 the tool limit) by an admin or an owner, the machine (engines, runtimes,
 icons) by an owner — and by nobody else; each user sees and ends their own
 logins and passkeys. **Removing a user deletes their data a week later unless
-they log in first.** Peers and `[host.*]` stay off. See
+they log in first.** Peers stay off. See
 [`RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`](RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md),
 [`RECORD/2026-11-05.roles-in-the-page.completed.md`](RECORD/2026-11-05.roles-in-the-page.completed.md),
 [`RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md`](RECORD/2026-11-05.removing-a-user-and-a-week-to-come-back.completed.md)

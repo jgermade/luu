@@ -3,12 +3,13 @@
 ///
 /// **The page is always this server's.** Served at `/h/<name>/`, every
 /// `./api/…` it asks resolves to `/h/<name>/api/…`, which this server forwards
-/// to the host with the host's token — so nothing else in the page knows
+/// over the link, by this machine's key — so nothing else in the page knows
 /// there is a second server. What does know is here: which host the page is
-/// on, the list of them (always this server's, at `/api/hosts`), and asking a
-/// host that is not the one on screen, which the project modal does before
-/// going there. See
-/// `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
+/// on, the list of them (always this server's, at `/api/hosts`: the luus
+/// linked by key), and asking a host that is not the one on screen, which the
+/// project modal does before going there. See
+/// `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`;
+/// `[host.*]` is gone since `RECORD/2026-11-09.five-decisions.WIP.md`.
 
 import { apiHeaders } from "./store.js"
 
@@ -36,15 +37,9 @@ async function call(method, path, body) {
   }
 }
 
-/// `{ hosts: { name: { url, "token-file" } }, editable, path }`.
+/// `{ hosts: { name: { url, linked, since } }, editable }`: the luus linked by
+/// key, and whether this page may go to Remote access to link another.
 export const loadHosts = () => call("GET", "/api/hosts")
-
-/// Replaces every `[host.*]`. The luus linked by key are listed beside them
-/// and are not hosts: they are Remote access's, and never written here.
-export const saveHosts = hosts =>
-  call("PUT", "/api/hosts", {
-    hosts: Object.fromEntries(Object.entries(hosts).filter(([, host]) => !host?.linked)),
-  })
 
 /// GET one of a host's API paths.
 export const askHost = (name, path) => call("GET", hostApi(name, path))

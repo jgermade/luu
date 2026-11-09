@@ -1754,7 +1754,7 @@ and `[sandbox.env]` moved each session's cargo home into its own `.tmp`. A host 
 
 A user writes none of it, and a refusal says the role, not the address. For a
 login the `Host` check against DNS rebinding is skipped: the cookie is
-`SameSite=Strict` and `Origin` was checked. Peers and `[host.*]` stay off on
+`SameSite=Strict` and `Origin` was checked. Peers stay off on
 a server with users. **Any logged-in user may point a session at any provider
 in `config.toml`**, wherever it sends, because an admin or an owner wrote it
 there; a `private` server keeps prompts on the machine unless a person at it
@@ -3189,17 +3189,20 @@ against the mechanism that was built first and removed:
 ### Another host is another `luu serve`, reached through this one
 
 **The rule above is why a remote project is a page that moves, not a session.**
-`[host.<name>]` in `config.toml` names another machine's `luu serve` by `url` and
-`token-file`, and this server forwards `/h/<name>/api/*` and `/h/<name>/ws*` there
-with that token, dropping its own. Everything else under `/h/<name>/` is **this**
-server's page, whose every request is relative, so served there its API is the
-host's. The session is made, recorded and approved on the host. This server
-carries bytes and keeps nothing.
+Another machine's luu is one linked by key (the section below), and this
+server forwards `/h/<name>/api/*` and `/h/<name>/ws*` to it over the link.
+Everything else under `/h/<name>/` is **this** server's page, whose every
+request is relative, so served there its API is the other luu's. The session
+is made, recorded and approved there. This server carries bytes and keeps
+nothing.
 
-The browser names a host and never a URL. The token is a path the page never
-reads. The proxy and `PUT /api/hosts` answer only on a loopback-bound server to
-a loopback `Host`, and an `Origin`, when there is one, must be this server: off
-loopback, this server's token would carry the host's approvals. The project
+The browser names a linked luu and never a URL. `/h/*` answers only on a
+loopback-bound server to a loopback `Host`, and an `Origin`, when there is one,
+must be this server: off loopback, this server's token would carry what the
+link lets this machine do. **`[host.<name>]`** — a URL and a bearer token in a
+file, the first way this was built — **was removed on 2026-11-09**, with no
+compatibility: a link by key did everything it did
+([`RECORD/2026-11-09.five-decisions.WIP.md`](RECORD/2026-11-09.five-decisions.WIP.md) §72(c)). The project
 modal behind the inspector's foot is host, then folder, and *Use this folder*
 keeps the session on screen — or, on another host, loads that host's page and
 the session it has. Where a session runs and what it sends to are the sessions
@@ -3243,7 +3246,7 @@ luu user key add ana@example.com "$(luu link key)"  # online, or Account → Key
   at once. `/h/<name>/api/*` and `/h/<name>/ws*` go over one
   `forwarded-tcpip` channel per request, HTTP/1.1 through `hyper`. They are
   for that user only: anyone else gets the 404 a missing one gets.
-  `/api/hosts` lists a user's linked luus, and never `[host.*]`.
+  `/api/hosts` lists a user's linked luus.
 - **The dialing side.** `[peer.<name>]` holds `url`, `ssh`, `host-key`,
   `name`, `dial` and `may`. `luu serve` dials each peer:
   - the wait starts at 1 s and doubles up to 30 s, and goes back to 1 s once
@@ -3253,7 +3256,7 @@ luu user key add ana@example.com "$(luu link key)"  # online, or Account → Key
   - a keepalive goes every 30 s.
 - **A channel is served by this luu's own router behind a peer gate, never as
   loopback.** `may` is `sessions` (by default: every read, and a session's
-  writes), `terminal` and `settings`. Remote access, `[host.*]`, logins and
+  writes), `terminal` and `settings`. Remote access, logins and
   `/h/*` are never a peer's. Past the gate the request is made to look like
   this machine's own page, so every check below it reads it as it already
   knows how.
@@ -3305,7 +3308,7 @@ exact name wins.
   who may reach the port*) does not reach a provider through the user's own
   link: the link is theirs, and choosing it per session is typing it.
 
-**A luu without users accepts links too**, and that is what replaces a
+**A luu without users accepts links too**, and that is what replaced
 `[host.*]` and its token:
 - `[server] ssh` is read on it as well. Who may link is a `[peer.<name>]`
   with `key = "ssh-ed25519 …"`, written by `luu link allow <name> <key>` or
@@ -3320,11 +3323,10 @@ exact name wins.
 - **Providers cross on these links too**, both ways.
 - `/api/link.json` gives the address from the request's own `Host` when
   there is no `ssh-public` and no origin.
-- The project modal lists the linked luus beside the hosts, and *Link a luu*
-  opens Remote access.
-- **A `[host.*]` still works and can still be edited, and is no longer
-  added from the page.** Removing the table would refuse every
-  `config.toml` that has one.
+- The project modal lists the linked luus, and *Link a luu* opens Remote
+  access.
+- **`[host.*]` is gone** (2026-11-09): a `config.toml` that still has one is
+  refused like any unknown table.
 
 **What a link trusts:** the online server ends TLS for the browser and holds
 the connection, so it sees what crosses it. See

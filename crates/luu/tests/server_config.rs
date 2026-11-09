@@ -1,7 +1,7 @@
 //! `[server]` in `config.toml`, and the `LUU_*` variables over it, deciding
-//! how a real `luu serve` is reached. The binary, for `tests/hosts.rs`'s
-//! reason: the file is read from `LUU_HOME`, and in-process that would be
-//! every other test's environment too. See
+//! how a real `luu serve` is reached. The binary, not the library: the file
+//! is read from `LUU_HOME`, and in-process that would be every other test's
+//! environment too. See
 //! `RECORD/2026-10-07.a-public-luu.completed.md`.
 
 use std::io::{BufRead, BufReader};
