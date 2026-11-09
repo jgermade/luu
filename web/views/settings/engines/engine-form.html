@@ -61,8 +61,9 @@
     { value: "llama", name: "llama.cpp", says: "llama-server · 12 MB · GGUF, one model per server", note: "recommended" },
     { value: "mlx", name: "MLX", says: "mlx-serve · Apple Silicon · MLX and GGUF" },
     { value: "ollama", name: "Ollama", says: "its own model store and its own MLX · 160 MB" },
+    { value: "strata", name: "Strata", says: "strata serve · large MoE models on one GPU · its own models" },
   ]
-  const BINS = { llama: "llama-server", mlx: "mlx-serve", ollama: "ollama" }
+  const BINS = { llama: "llama-server", mlx: "mlx-serve", ollama: "ollama", strata: "strata" }
   // Why a kind has no release here, where it has none (`cannot_install`).
   const cannot = k => view?.cannot_install?.[k] || ""
   const foundOf = k => view?.found?.[k] || []
@@ -332,7 +333,9 @@
                  @change="source = 'managed'">
           <span class="source-text">
             <strong>Install luu's own copy</strong>
-            <span class="dim small">{{ cannot(kind) || `the official release, checked against the sha256 GitHub publishes${haveCopy ? " — already downloaded" : ""}` }}</span>
+            <span class="dim small">{{ cannot(kind) || (kind === "strata"
+              ? `Strata's Terminal, ~100 MB: checked against GitHub's sha256 and its own manifest, then its signed feed${haveCopy ? " — already downloaded" : ""}. A model, and the engine for the card, come from strata launch`
+              : `the official release, checked against the sha256 GitHub publishes${haveCopy ? " — already downloaded" : ""}`) }}</span>
           </span>
         </label>
         <div :if="source === 'managed'" class="row">
@@ -403,7 +406,7 @@
       <div class="row">
         <InputContainer label="Arguments" :model="args"
                         :placeholder="kind === 'llama' ? '-c 8192 -ngl 99' : ''"
-                        :description="kind === 'ollama' ? 'after serve' : 'after --host, --port and the model, which luu adds; there is no shell, so ~ is not expanded'" />
+                        :description="kind === 'ollama' ? 'after serve' : kind === 'strata' ? 'after serve --profile, --host and --port, which luu adds — --parallel 2, --max-queue 8; there is no shell' : 'after --host, --port and the model, which luu adds; there is no shell, so ~ is not expanded'" />
         <InputContainer label="Ready within" :model="readyTimeout" placeholder="120"
                         description="seconds a session waits for it" />
       </div>
@@ -452,7 +455,7 @@
     color: var(--luu-accent);
     font-size: 11px;
   }
-  .kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+  .kinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .5rem; }
   .kind {
     display: flex;
     flex-direction: column;

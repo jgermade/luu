@@ -2788,6 +2788,23 @@ chosen over `mlx_lm.server` by measurement on this machine: 90–92 against 79�
 a first token in ~32 ms against ~125 ms, same MLX weights. It also loads GGUF through an embedded
 llama.cpp — an ollama blob is handed to it as a `.gguf` link, because it tells the two apart by
 extension.
+**`strata` is Strata's `strata serve`** — large mixture-of-experts models on one consumer GPU,
+spoken to as `openai` — and it differs from the other three in where its models come from.
+**luu's own copy** is the release's *Terminal* (the CLI and its own Python, ~100 MB, `v0.2.12`):
+the archive `install-manifest.txt` names for this platform, checked against GitHub's sha256
+*and* the manifest's, which must agree, then the release's signed feed checked by the binary
+just verified (`strata update --check --no-engine`), as Strata's own installer does — a copy
+that fails it is removed. **It runs in the foreground**, `strata serve --profile <run config>
+--host 127.0.0.1 --port <placed>`, ready when `/health` answers (Strata loads before it binds),
+and is **stopped with a SIGTERM**, killed only if it has not drained in 10 s. **Its models are
+its own**: the run configs `strata launch` installed, by id, read from `strata models list
+--installed --output json` — never the catalog's files, which `runs_on` says for every one of
+them. A model's id is what a session and the sheet name; a run config's path may be written in
+the file, never from the page. A model missing a file is listed greyed with Strata's reason,
+and installing one — the GPU engine and tens to hundreds of GB — stays `strata launch`, which
+the page names: luu does not download a model. Its reasoning arrives in `reasoning_content`
+and its window at `/props`, both already read. See
+[`RECORD/2026-11-08.strata-as-an-engine.WIP.md`](RECORD/2026-11-08.strata-as-an-engine.WIP.md).
 
 **It is all automatic.** luu's own copy is downloaded the first time a session needs it; the
 engine starts then; a session that picks another model restarts a llama.cpp engine on it (it

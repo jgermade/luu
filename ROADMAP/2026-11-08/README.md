@@ -120,7 +120,7 @@ section (above).
 | --- | --- | --- | --- |
 | 13 | **A judge that is not the model under test.** Row 38's key splits literals from conclusions, so a judge would only score the second half | a design argument | [`machines.md`](machines.md) P1 |
 | 16 | **Rotating and revoking an approval key**, and nothing signs a *recording*. Also: **whether a passkey login signs approvals**, carried by [`passkeys`](../../RECORD/2026-11-05.passkeys.completed.md) | a fleet bigger than one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
-| 75 | **Strata, measured as a provider before it is an engine**: `backend = "openai"` at `127.0.0.1:8080/v1`, row 38's corpus on machine 4 — usage, native calls, its window. `kind = "strata"` only if that pays: luu's own copy from its manifest and SHA-256, `strata serve --port` as a child, its installed run configs as the models (2026-11-09: it has a foreground server, a port flag and a verifiable release; its reasoning is `reasoning_content`) | a run on machine 4 | [`strata-as-an-engine`](../../RECORD/2026-11-08.strata-as-an-engine.WIP.md) |
+| 75 | **Strata, measured as a provider before it is an engine**: row 38's corpus on machine 4 — usage, native calls, its window, a real model on a real card. ~~`kind = "strata"` only if that pays~~ *Built first, on request, 2026-11-09*: luu's own copy from its manifest, SHA-256 and signed feed, `strata serve --profile` as a child, its installed run configs as the models — what is left is the run | a run on machine 4 | [`strata-as-an-engine`](../../RECORD/2026-11-08.strata-as-an-engine.WIP.md) |
 
 **Section E — what a session may do: policies and grants.** The section heads
 in *italics* are in

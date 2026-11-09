@@ -2274,6 +2274,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines/{name}/rename", post(rename_engine))
         .route("/api/engines/{name}/chat", post(chat_engine))
         .route("/api/engines/{name}/start", post(start_engine))
+        .route("/api/engines/{name}/models", get(get_engine_models))
         .route("/api/engines/{name}/stop", post(stop_engine))
         // Other machines' `luu serve`, reached through this one: the list, and
         // everything a page served under `/h/<name>/` asks of its API. See
@@ -8929,11 +8930,23 @@ struct Discovered {
     path: String,
 }
 
-const KINDS: [crate::provider::EngineKind; 3] = [
+const KINDS: [crate::provider::EngineKind; 4] = [
     crate::provider::EngineKind::Llama,
     crate::provider::EngineKind::Mlx,
     crate::provider::EngineKind::Ollama,
+    crate::provider::EngineKind::Strata,
 ];
+
+/// Whether `model` may be named from the page as a Strata model: an id out of
+/// `strata models list`, never a path — a run config the page could name is
+/// any file this machine has. A path is the file's to write.
+fn strata_id(model: &str) -> bool {
+    !model.is_empty()
+        && !model.starts_with('.')
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
 
 async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::provider::ConfigError> {
     let (config, path) = load_config().await?;
@@ -9348,15 +9361,6 @@ async fn start_engine(
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(str::to_string);
-    if let Some(model) = &model
-        && !crate::models::is_reference(model)
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("{model} is not a model on this machine: from this page an engine starts on one out of the catalog"),
-        )
-            .into_response();
-    }
     let engine = match load_config().await {
         Ok((config, _)) => config.engines().get(&name).cloned(),
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
@@ -9368,6 +9372,23 @@ async fn start_engine(
         )
             .into_response();
     };
+    if let Some(model) = &model {
+        let strata = engine.kind == crate::provider::EngineKind::Strata;
+        if strata && !strata_id(model) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("{model} is not a Strata model id: from this page a Strata engine starts on one `strata models list` names"),
+            )
+                .into_response();
+        }
+        if !strata && !crate::models::is_reference(model) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("{model} is not a model on this machine: from this page an engine starts on one out of the catalog"),
+            )
+                .into_response();
+        }
+    }
     if let Some(model) = model
         && engine.kind != crate::provider::EngineKind::Ollama
     {
@@ -9440,6 +9461,65 @@ async fn place_engine(name: &str, engine: &crate::provider::Engine) -> Option<u1
     blocking(move || crate::engines::place(&name, kind, &fixed)).await
 }
 
+/// `GET /api/engines/{name}/models`: what a Strata engine can start on, asked
+/// of Strata — its sheet's list, in the catalog's shape (`reference`, `name`,
+/// `label`, `badge`, `cannot`) so the sheet draws both the same way, and a
+/// `reason` where there is none. Only for Strata: every other kind's models
+/// are the catalog's, `GET /api/models`.
+async fn get_engine_models(Path(name): Path<String>) -> Response {
+    let engine = match load_config().await {
+        Ok((config, _)) => config.engines().get(&name).cloned(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(engine) = engine else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    if engine.kind != crate::provider::EngineKind::Strata {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "{name} is a {} engine: its models are the catalog's, GET /api/models",
+                engine.kind.as_str()
+            ),
+        )
+            .into_response();
+    }
+    match crate::engines::strata_models_of(&engine).await {
+        Ok(installed) => {
+            let models: Vec<serde_json::Value> = installed
+                .into_iter()
+                .map(|model| {
+                    let name = model.name.clone().unwrap_or_else(|| model.id.clone());
+                    let cannot = match model.servable() {
+                        Ok(()) => serde_json::json!({}),
+                        Err(why) => serde_json::json!({ "strata": why }),
+                    };
+                    serde_json::json!({
+                        "reference": model.id,
+                        "name": name,
+                        "label": format!("{name} ({})", model.id),
+                        "badge": ["strata"],
+                        "context_tokens": model.context_tokens,
+                        "cannot": cannot,
+                    })
+                })
+                .collect();
+            let reason = models.is_empty().then(|| {
+                format!(
+                    "Strata has no model installed. {}",
+                    crate::engines::STRATA_INSTALL_HINT
+                )
+            });
+            Json(serde_json::json!({ "models": models, "reason": reason })).into_response()
+        }
+        Err(reason) => Json(serde_json::json!({ "models": [], "reason": reason })).into_response(),
+    }
+}
+
 /// The first free port for a kind, from its own upward: what the form and
 /// *use* write, and what the start sheet offers to move a busy engine to. See
 /// [`crate::engines::free_port`].
@@ -9450,6 +9530,7 @@ async fn free_engine_port(
         Some("llama") | None => crate::provider::EngineKind::Llama,
         Some("mlx") => crate::provider::EngineKind::Mlx,
         Some("ollama") => crate::provider::EngineKind::Ollama,
+        Some("strata") => crate::provider::EngineKind::Strata,
         Some(other) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -9527,7 +9608,8 @@ async fn chat_engine(
     let named = match (&model, ollama) {
         (Some(model), true) => model.strip_prefix("ollama:").unwrap_or(model).to_string(),
         (Some(model), false) => {
-            if !crate::models::is_reference(model) {
+            let strata = engine.kind == crate::provider::EngineKind::Strata;
+            if (strata && !strata_id(model)) || (!strata && !crate::models::is_reference(model)) {
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     format!("{model} is not a model on this machine"),
@@ -10048,7 +10130,20 @@ async fn get_provider_models(
     let local_engine = resolved
         .engine
         .as_ref()
-        .filter(|(_, e)| e.kind != crate::provider::EngineKind::Ollama)
+        .filter(|(_, e)| {
+            !matches!(
+                e.kind,
+                crate::provider::EngineKind::Ollama | crate::provider::EngineKind::Strata
+            )
+        })
+        .map(|(_, e)| e.clone());
+    // A Strata engine serves what Strata installed, asked of Strata: its run
+    // configs, by id, the ones missing a file beside them with why. Never the
+    // catalog, which is files Strata does not read.
+    let strata_engine = resolved
+        .engine
+        .as_ref()
+        .filter(|(_, e)| e.kind == crate::provider::EngineKind::Strata)
         .map(|(_, e)| e.clone());
     let mut labels = std::collections::BTreeMap::new();
     let mut badges: std::collections::BTreeMap<String, Vec<&'static str>> =
@@ -10059,82 +10154,113 @@ async fn get_provider_models(
         _ => vec!["system", "ollama"],
     };
     let mut unavailable = Vec::new();
-    let (models, reason) = match &local_engine {
-        Some(engine) => {
-            let catalog = tokio::task::spawn_blocking(crate::models::catalog)
-                .await
-                .unwrap_or_default();
-            let mut models: Vec<String> = Vec::new();
-            if let Some(own) = &engine.model {
-                models.push(own.clone());
-                labels.insert(own.clone(), crate::models::label(own));
-            }
-            for model in catalog {
-                match model.runs_on(engine.kind) {
-                    Ok(()) => {
-                        if !models.contains(&model.reference) {
-                            models.push(model.reference.clone());
+    let (models, reason) = match (&local_engine, &strata_engine) {
+        (None, Some(engine)) => match crate::engines::strata_models_of(engine).await {
+            Ok(installed) => {
+                let mut models = Vec::new();
+                for model in installed {
+                    let label = model.name.clone().unwrap_or_else(|| model.id.clone());
+                    match model.servable() {
+                        Ok(()) => {
+                            badges.insert(model.id.clone(), vec!["strata"]);
+                            labels.insert(model.id.clone(), label);
+                            models.push(model.id);
                         }
-                        badges.insert(model.reference.clone(), model.badge);
-                        labels.insert(model.reference, model.name);
-                    }
-                    Err(reason) => unavailable.push(Unavailable {
-                        model: model.reference,
-                        label: model.name,
-                        badge: model.badge,
-                        reason,
-                    }),
-                }
-            }
-            let reason = models.is_empty().then(|| {
-                format!(
-                    "no model this {} engine loads in ollama, llama.cpp, Hugging Face or luu's \
-                     own models directory",
-                    engine.kind.as_str()
-                )
-            });
-            (models, reason)
-        }
-        None => match backend.models().await {
-            Ok(models) => {
-                // Named by where they came from, the way the catalog is.
-                if resolved.kind == crate::provider::BackendKind::Ollama {
-                    for model in &models {
-                        badges.insert(model.clone(), ollama_badge.clone());
+                        Err(reason) => unavailable.push(Unavailable {
+                            model: model.id,
+                            label,
+                            badge: vec!["strata"],
+                            reason,
+                        }),
                     }
                 }
-                (models, None)
+                let reason = models.is_empty().then(|| {
+                    format!(
+                        "Strata has no model installed that it can serve. {}",
+                        crate::engines::STRATA_INSTALL_HINT
+                    )
+                });
+                (models, reason)
             }
-            // An ollama engine luu starts and nothing has started yet answers
-            // on no port — an automatic one has none at all — and what it
-            // would serve is ollama's store on this disk, by ollama's own
-            // names. Asking the port was a `connection refused` on every
-            // picker that showed the provider before a session had used it.
-            Err(_)
-                if resolved
-                    .engine
-                    .as_ref()
-                    .is_some_and(|(_, e)| e.kind == crate::provider::EngineKind::Ollama) =>
-            {
+            Err(error) => (Vec::new(), Some(error)),
+        },
+        _ => match &local_engine {
+            Some(engine) => {
                 let catalog = tokio::task::spawn_blocking(crate::models::catalog)
                     .await
                     .unwrap_or_default();
-                let models: Vec<String> = catalog
-                    .into_iter()
-                    .filter(|m| m.source == crate::models::Source::Ollama)
-                    .map(|m| {
-                        let mut badge = ollama_badge.clone();
-                        badge.extend(m.badge.iter().skip(2));
-                        badges.insert(m.name.clone(), badge);
-                        m.name
-                    })
-                    .collect();
-                let reason = models
-                    .is_empty()
-                    .then(|| "no model in ollama's store on this machine".to_string());
+                let mut models: Vec<String> = Vec::new();
+                if let Some(own) = &engine.model {
+                    models.push(own.clone());
+                    labels.insert(own.clone(), crate::models::label(own));
+                }
+                for model in catalog {
+                    match model.runs_on(engine.kind) {
+                        Ok(()) => {
+                            if !models.contains(&model.reference) {
+                                models.push(model.reference.clone());
+                            }
+                            badges.insert(model.reference.clone(), model.badge);
+                            labels.insert(model.reference, model.name);
+                        }
+                        Err(reason) => unavailable.push(Unavailable {
+                            model: model.reference,
+                            label: model.name,
+                            badge: model.badge,
+                            reason,
+                        }),
+                    }
+                }
+                let reason = models.is_empty().then(|| {
+                    format!(
+                        "no model this {} engine loads in ollama, llama.cpp, Hugging Face or luu's \
+                     own models directory",
+                        engine.kind.as_str()
+                    )
+                });
                 (models, reason)
             }
-            Err(error) => (Vec::new(), Some(error.to_string())),
+            None => match backend.models().await {
+                Ok(models) => {
+                    // Named by where they came from, the way the catalog is.
+                    if resolved.kind == crate::provider::BackendKind::Ollama {
+                        for model in &models {
+                            badges.insert(model.clone(), ollama_badge.clone());
+                        }
+                    }
+                    (models, None)
+                }
+                // An ollama engine luu starts and nothing has started yet answers
+                // on no port — an automatic one has none at all — and what it
+                // would serve is ollama's store on this disk, by ollama's own
+                // names. Asking the port was a `connection refused` on every
+                // picker that showed the provider before a session had used it.
+                Err(_)
+                    if resolved
+                        .engine
+                        .as_ref()
+                        .is_some_and(|(_, e)| e.kind == crate::provider::EngineKind::Ollama) =>
+                {
+                    let catalog = tokio::task::spawn_blocking(crate::models::catalog)
+                        .await
+                        .unwrap_or_default();
+                    let models: Vec<String> = catalog
+                        .into_iter()
+                        .filter(|m| m.source == crate::models::Source::Ollama)
+                        .map(|m| {
+                            let mut badge = ollama_badge.clone();
+                            badge.extend(m.badge.iter().skip(2));
+                            badges.insert(m.name.clone(), badge);
+                            m.name
+                        })
+                        .collect();
+                    let reason = models
+                        .is_empty()
+                        .then(|| "no model in ollama's store on this machine".to_string());
+                    (models, reason)
+                }
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            },
         },
     };
     let profile = config.profiles().get(name).cloned().unwrap_or_default();

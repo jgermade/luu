@@ -129,6 +129,11 @@ export const defaultPort = kind => ({ ollama: 11434, mlx: 11234 })[kind] || 8080
 /// each with a `reference` for `config.toml` and a `label` to show.
 export const loadCatalog = () => call("GET", "./api/models")
 
+/// What a Strata engine can start on, asked of Strata: `{ models, reason }`,
+/// each model in the catalog's shape. Its models are its own run configs,
+/// never the catalog's files — see `get_engine_models`.
+export const loadEngineModels = name => call("GET", `./api/engines/${encodeURIComponent(name)}/models`)
+
 const SOURCES = ["ollama", "llama.cpp", "huggingface", "luu"]
 
 /// `name (source)` for a reference into the catalog, the text itself for any

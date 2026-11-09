@@ -194,7 +194,7 @@
       </div>
       <div class="ds-hero-body">
         <h4 class="ds-hero-title">Motores de inferencia</h4>
-        <p class="ds-hero-desc">Servidores de modelos que luu inicia y supervisa localmente: llama-server, mlx y ollama.</p>
+        <p class="ds-hero-desc">Servidores de modelos que luu inicia y supervisa localmente: llama-server, mlx, ollama y strata.</p>
       </div>
     </div>
 
@@ -325,7 +325,8 @@
           <dt :if="card.engine">Arguments</dt>
           <dd :if="card.engine">
             <code :if="(card.engine.args || []).length">{{ card.engine.args.join(" ") }}</code>
-            <span :if="!(card.engine.args || []).length" class="dim">none — the model is the part worth writing here</span>
+            <span :if="!(card.engine.args || []).length && card.engine.kind !== 'strata'" class="dim">none — the model is the part worth writing here</span>
+            <span :if="!(card.engine.args || []).length && card.engine.kind === 'strata'" class="dim">none — luu adds <code>serve --profile</code>, the host and the port</span>
           </dd>
         </dl>
       </section>

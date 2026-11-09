@@ -1,5 +1,5 @@
-//! Model servers luu starts: `llama-server` and `ollama serve`, as children of
-//! `luu serve` that die with it.
+//! Model servers luu starts: `llama-server`, `ollama serve`, `mlx-serve` and
+//! `strata serve`, as children of `luu serve` that die with it.
 //!
 //! Three questions, one section each: **which binary** (found on this machine,
 //! luu's own copy, or a path the file names), **its life** (started when a
@@ -27,6 +27,20 @@ pub const OLLAMA_VERSION: &str = "v0.34.4";
 /// digest, measured against `mlx_lm.server` on this repository's M-series
 /// machine and chosen over it — see the engines record.
 pub const MLX_SERVE_VERSION: &str = "v26.9.6";
+/// Strata's release, whose `install-manifest.txt` names the *Terminal*
+/// archive for each platform: the CLI and its own Python, and no GPU engine —
+/// `strata launch` fetches that for the card, from the same signed feed, the
+/// first time a model is installed. See
+/// `RECORD/2026-11-08.strata-as-an-engine.WIP.md`.
+pub const STRATA_VERSION: &str = "v0.2.12";
+
+/// How long a Strata asked to stop gets to drain before it is killed: it
+/// stops on SIGTERM, and a kill skips the release of its activity lease.
+const STRATA_STOP_SECS: u64 = 10;
+
+/// How long `strata models list` may take: it reads the run configs and
+/// checks their files, which on a disk of 200 GB models is not instant.
+const STRATA_LIST_SECS: u64 = 30;
 
 /// Lines of a server's output kept for the page: enough to show why it died.
 const LOG_LINES: usize = 200;
@@ -38,6 +52,7 @@ impl EngineKind {
             EngineKind::Llama => "llama",
             EngineKind::Ollama => "ollama",
             EngineKind::Mlx => "mlx",
+            EngineKind::Strata => "strata",
         }
     }
 
@@ -50,6 +65,8 @@ impl EngineKind {
             (EngineKind::Ollama, false) => "ollama",
             (EngineKind::Ollama, true) => "ollama.exe",
             (EngineKind::Mlx, _) => "mlx-serve",
+            (EngineKind::Strata, false) => "strata",
+            (EngineKind::Strata, true) => "strata.cmd",
         }
     }
 
@@ -58,6 +75,9 @@ impl EngineKind {
             EngineKind::Llama => 8080,
             EngineKind::Ollama => 11434,
             EngineKind::Mlx => 11234,
+            // Strata's own: where `strata launch` serves, and what its docs
+            // and the clients it sets up assume.
+            EngineKind::Strata => 8080,
         }
     }
 
@@ -66,6 +86,7 @@ impl EngineKind {
             EngineKind::Llama => LLAMA_VERSION,
             EngineKind::Ollama => OLLAMA_VERSION,
             EngineKind::Mlx => MLX_SERVE_VERSION,
+            EngineKind::Strata => STRATA_VERSION,
         }
     }
 
@@ -74,15 +95,17 @@ impl EngineKind {
             EngineKind::Llama => "ggml-org/llama.cpp",
             EngineKind::Ollama => "ollama/ollama",
             EngineKind::Mlx => "ddalcu/mlx-serve",
+            EngineKind::Strata => "Niko1221/Strata",
         }
     }
 
     /// What answers once the model is loaded. llama-server's `/health` is 503
     /// while it loads and 200 after; ollama's `/` is 200 as soon as it listens,
-    /// because it loads a model per request.
+    /// because it loads a model per request. Strata loads the engine before
+    /// it binds the port, so its `/health` answering is its model loaded.
     fn health(self) -> &'static str {
         match self {
-            EngineKind::Llama | EngineKind::Mlx => "/health",
+            EngineKind::Llama | EngineKind::Mlx | EngineKind::Strata => "/health",
             EngineKind::Ollama => "/",
         }
     }
@@ -90,12 +113,16 @@ impl EngineKind {
     /// The URL a profile for this engine sends to.
     pub fn url(self, port: u16) -> String {
         match self {
-            EngineKind::Llama | EngineKind::Mlx => format!("http://127.0.0.1:{port}/v1"),
+            EngineKind::Llama | EngineKind::Mlx | EngineKind::Strata => {
+                format!("http://127.0.0.1:{port}/v1")
+            }
             EngineKind::Ollama => format!("http://127.0.0.1:{port}"),
         }
     }
 
     /// The release asset for this machine, by the names each project uses.
+    /// For Strata it is the **platform**: the line of the release's
+    /// `install-manifest.txt` that names the archive, read when it downloads.
     pub fn asset(self, version: &str, variant: Option<&str>) -> Result<String, String> {
         asset_for(
             self,
@@ -144,6 +171,25 @@ fn asset_for(
                 _ => return Err(unknown()),
             };
             Ok(format!("llama-{version}-bin-{platform}.{ext}"))
+        }
+        // One archive per platform, named by the manifest rather than by a
+        // pattern: the CLI and its own Python. The GPU engine is Strata's to
+        // fetch for the card, so there is no variant to choose here.
+        EngineKind::Strata => {
+            if let Some(v) = variant {
+                return Err(format!(
+                    "Strata publishes no `{v}` build: one archive per platform, and the engine \
+                     for the card is fetched by `strata launch`"
+                ));
+            }
+            match (os, arch) {
+                ("linux", "x86_64") => Ok("linux-x86_64".into()),
+                ("linux", "aarch64") => Ok("linux-aarch64".into()),
+                ("macos", "aarch64") => Ok("macos-arm64".into()),
+                ("windows", "x86_64") => Ok("windows-x86_64".into()),
+                ("macos", _) => Err("Strata for Mac needs Apple Silicon".into()),
+                _ => Err(unknown()),
+            }
         }
         EngineKind::Ollama => {
             let suffix = variant.map(|v| format!("-{v}")).unwrap_or_default();
@@ -486,8 +532,17 @@ fn gguf_link(reference: &str, target: &Path) -> Result<PathBuf, String> {
 /// is how choosing a model in the chat moves the engine onto it.
 pub fn for_run(resolved: &crate::provider::Resolved) -> Option<(String, Engine)> {
     let (name, mut engine) = resolved.engine.clone()?;
-    if engine.kind != EngineKind::Ollama && crate::models::is_reference(&resolved.model) {
-        engine.model = Some(resolved.model.clone());
+    match engine.kind {
+        // Its models are its own ids, never a catalog reference: whatever the
+        // session asked for is the one it starts on.
+        EngineKind::Strata if !resolved.model.trim().is_empty() => {
+            engine.model = Some(resolved.model.clone());
+        }
+        EngineKind::Strata | EngineKind::Ollama => {}
+        _ if crate::models::is_reference(&resolved.model) => {
+            engine.model = Some(resolved.model.clone());
+        }
+        _ => {}
     }
     Some((name, engine))
 }
@@ -676,6 +731,7 @@ pub struct Status {
 
 struct Running {
     child: tokio::process::Child,
+    kind: EngineKind,
     binary: PathBuf,
     started: Instant,
     /// The reference it was started on, so a session that asks for another
@@ -819,6 +875,174 @@ async fn answering(kind: EngineKind, port: u16) -> bool {
     }
 }
 
+/// Ends an engine's process. Strata is asked first — SIGTERM, which it
+/// answers by draining and releasing what it holds — and killed only if it is
+/// still there after [`STRATA_STOP_SECS`]; every other kind is killed, as it
+/// always was.
+async fn end(running: &mut Running) {
+    #[cfg(unix)]
+    if running.kind == EngineKind::Strata
+        && let Some(pid) = running.child.id()
+    {
+        // SAFETY: a signal to a child this process spawned and has not reaped.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        let asked = Duration::from_secs(STRATA_STOP_SECS);
+        if tokio::time::timeout(asked, running.child.wait())
+            .await
+            .is_ok()
+        {
+            return;
+        }
+    }
+    let _ = running.child.kill().await;
+}
+
+// ---- Strata's models --------------------------------------------------------
+
+/// One model Strata installed, as `strata models list --installed --output
+/// json` describes it: an id, the run config `strata serve` takes, and
+/// whether every file it names is there.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Serialize)]
+pub struct StrataModel {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The `strata-<model>.json` that `serve --profile` takes.
+    #[serde(default)]
+    pub source_config: Option<String>,
+    #[serde(default)]
+    pub context_tokens: Option<u32>,
+    /// `present` when every file it names is there, `missing_or_invalid` or
+    /// `invalid` otherwise.
+    #[serde(default)]
+    pub component_status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl StrataModel {
+    /// Whether `strata serve` can start on it, and why not.
+    pub fn servable(&self) -> Result<(), String> {
+        match self.component_status.as_str() {
+            "present" => Ok(()),
+            status => Err(match &self.error {
+                Some(error) => format!("Strata says {status}: {error}"),
+                None => format!(
+                    "Strata says {status}: `strata models inspect {}` names what is missing",
+                    self.id
+                ),
+            }),
+        }
+    }
+}
+
+/// What to type to install a model, when Strata has none or not the one asked.
+pub const STRATA_INSTALL_HINT: &str = "`strata launch --family <family> --model <variant>` installs one — the engine for the card \
+     and the model's files, which can be hundreds of GB — and `strata launch --stop` stops what \
+     it started";
+
+/// `strata models list --installed --output json`, read. The envelope is
+/// Strata's own: `{"ok": true, "models": [...]}` on success, `{"ok": false,
+/// "error": ...}` when it refused.
+pub fn parse_strata_models(stdout: &str) -> Result<Vec<StrataModel>, String> {
+    #[derive(serde::Deserialize)]
+    struct Listed {
+        #[serde(default)]
+        ok: bool,
+        #[serde(default)]
+        models: Vec<StrataModel>,
+        #[serde(default)]
+        error: Option<serde_json::Value>,
+    }
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with('{'))
+        .ok_or("`strata models list` printed no JSON")?;
+    let listed: Listed = serde_json::from_str(line)
+        .map_err(|error| format!("`strata models list` printed what this cannot read: {error}"))?;
+    match (listed.ok, listed.error) {
+        (true, _) => Ok(listed.models),
+        (false, Some(error)) => Err(format!(
+            "`strata models list` refused: {}",
+            error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| error.to_string())
+        )),
+        (false, None) => Err("`strata models list` said it failed, and not why".into()),
+    }
+}
+
+/// The models the Strata at `binary` has installed, asked of it.
+pub async fn strata_models(binary: &Path) -> Result<Vec<StrataModel>, String> {
+    let run = tokio::process::Command::new(binary)
+        .args(["models", "list", "--installed", "--output", "json"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(STRATA_LIST_SECS), run)
+        .await
+        .map_err(|_| format!("`strata models list` did not answer within {STRATA_LIST_SECS}s"))?
+        .map_err(|error| format!("running {}: {error}", binary.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match parse_strata_models(&stdout) {
+        Ok(models) => Ok(models),
+        Err(_) if !output.status.success() => Err(format!(
+            "`strata models list` failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+/// The models a Strata engine would list: its binary resolved — not
+/// downloaded — and asked.
+pub async fn strata_models_of(engine: &Engine) -> Result<Vec<StrataModel>, String> {
+    let binary = resolve_binary(engine)?;
+    strata_models(&binary).await
+}
+
+/// The run config a Strata engine starts on: a path as it is, an id looked up
+/// in what Strata installed.
+async fn strata_profile(name: &str, binary: &Path, model: Option<&str>) -> Result<PathBuf, String> {
+    let model = model
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "engine {name} is a Strata engine and names no model: choose one Strata installed. \
+             {STRATA_INSTALL_HINT}"
+            )
+        })?;
+    if model.ends_with(".json") || model.contains('/') || model.contains('\\') {
+        let path = crate::provider::expand_home(Path::new(model));
+        return match path.is_file() {
+            true => Ok(path),
+            false => Err(format!("{}: no such run config", path.display())),
+        };
+    }
+    let installed = strata_models(binary).await?;
+    let found = installed.iter().find(|m| m.id == model).ok_or_else(|| {
+        let ids: Vec<&str> = installed.iter().map(|m| m.id.as_str()).collect();
+        format!(
+            "Strata has no model `{model}` installed ({}). {STRATA_INSTALL_HINT}",
+            match ids.is_empty() {
+                true => "it has none".to_string(),
+                false => format!("it has {}", ids.join(", ")),
+            }
+        )
+    })?;
+    found.servable().map_err(|why| format!("{model}: {why}"))?;
+    found
+        .source_config
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("Strata names no run config for `{model}`"))
+}
+
 fn pipe(
     from: impl AsyncRead + Unpin + Send + 'static,
     log: Arc<std::sync::Mutex<VecDeque<String>>>,
@@ -938,6 +1162,14 @@ impl Supervisor {
         in_use(name, engine)?;
         let binary = resolve_binary(engine)?;
         let port = listening(name, engine)?;
+        // Asked of Strata itself, before the slots are held: a model's id is
+        // its run config, which only `strata models list` knows where to find.
+        let profile = match engine.kind {
+            EngineKind::Strata => {
+                Some(strata_profile(name, &binary, engine.model.as_deref()).await?)
+            }
+            _ => None,
+        };
         let mut slots = self.slots.lock().await;
         let slot = slots.entry(name.to_string()).or_default();
         slot.reap();
@@ -971,6 +1203,14 @@ impl Supervisor {
                     .arg("serve")
                     .env("OLLAMA_HOST", format!("127.0.0.1:{port}"));
             }
+            // In the foreground, on the port luu placed it, on the run config
+            // its model is: `launch` is the one that detaches, and asks.
+            EngineKind::Strata => {
+                command
+                    .args(["serve", "--profile"])
+                    .arg(profile.as_deref().unwrap_or(Path::new("")))
+                    .args(["--host", "127.0.0.1", "--port", &port.to_string()]);
+            }
         }
         command
             .args(&engine.args)
@@ -990,6 +1230,10 @@ impl Supervisor {
             let model = match (&engine.kind, &engine.model) {
                 (EngineKind::Llama, Some(reference)) => format!(" -m <{reference}>"),
                 (EngineKind::Mlx, Some(reference)) => format!(" --model <{reference}>"),
+                (EngineKind::Strata, _) => format!(
+                    " serve --profile {}",
+                    profile.as_deref().unwrap_or(Path::new("")).display()
+                ),
                 _ => String::new(),
             };
             log.push_back(format!(
@@ -1007,6 +1251,7 @@ impl Supervisor {
         slot.exit = None;
         slot.running = Some(Running {
             child,
+            kind: engine.kind,
             binary,
             started: Instant::now(),
             model: engine.model.clone(),
@@ -1227,7 +1472,7 @@ impl Supervisor {
             && let Some(mut running) = slot.running.take()
         {
             tracing::info!(target: "luu::engines", engine = name, pid = running.child.id(), "engine process stopped");
-            let _ = running.child.kill().await;
+            end(&mut running).await;
             slot.exit = Some("stopped from luu".into());
         }
     }
@@ -1245,7 +1490,7 @@ impl Supervisor {
             }
             if let Some(mut running) = slot.running.take() {
                 tracing::info!(target: "luu::engines", engine = name.as_str(), pid = running.child.id(), "engine process stopped: no session sends to it");
-                let _ = running.child.kill().await;
+                end(&mut running).await;
                 slot.exit = Some("stopped: no session sends to it".into());
             }
         }
@@ -1257,7 +1502,7 @@ impl Supervisor {
         let mut slots = self.slots.lock().await;
         for slot in slots.values_mut() {
             if let Some(mut running) = slot.running.take() {
-                let _ = running.child.kill().await;
+                end(&mut running).await;
             }
         }
     }
@@ -1479,6 +1724,37 @@ impl Supervisor {
         }
 
         let client = http();
+        // Strata names its archive in a manifest beside it, with its SHA-256:
+        // read first, and the file it names is the asset looked for below.
+        let manifest = match kind {
+            EngineKind::Strata => {
+                let url = format!(
+                    "https://github.com/{}/releases/download/{version}/install-manifest.txt",
+                    kind.repo()
+                );
+                self.say(key, format!("reading {url}"));
+                let text = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .and_then(|r| r.error_for_status())
+                    .map_err(|e| format!("reading Strata {version}'s install-manifest.txt: {e}"))?
+                    .text()
+                    .await
+                    .map_err(|e| format!("reading Strata {version}'s install-manifest.txt: {e}"))?;
+                let line = strata_manifest(&text, asset)?;
+                self.say(
+                    key,
+                    format!(
+                        "{asset}: {} (Terminal {}), sha256 {}",
+                        line.file, line.version, line.sha256
+                    ),
+                );
+                Some(line)
+            }
+            _ => None,
+        };
+        let asset = manifest.as_ref().map_or(asset, |line| line.file.as_str());
         self.say(key, format!("asking GitHub for {} {version}", kind.repo()));
         let release: Release = client
             .get(format!(
@@ -1506,6 +1782,17 @@ impl Supervisor {
             .and_then(|d| d.strip_prefix("sha256:"))
             .ok_or("GitHub publishes no sha256 for this asset, so it cannot be checked")?
             .to_ascii_lowercase();
+        // Two accounts of one file, GitHub's and the release's own: both say
+        // the same, or nothing is downloaded.
+        if let Some(line) = &manifest
+            && line.sha256 != expected
+        {
+            return Err(format!(
+                "{asset}: GitHub's sha256 ({expected}) is not the one Strata's manifest names \
+                 ({}); not downloaded",
+                line.sha256
+            ));
+        }
         self.update(key, |i| i.total = found.size);
         self.say(
             key,
@@ -1624,10 +1911,99 @@ impl Supervisor {
             let _ = tokio::fs::remove_dir_all(&staging).await;
         }
         if let Some(binary) = find_in(dir, kind.binary_name()) {
+            // The release's signed feed, checked by the binary just verified —
+            // the step Strata's own installer takes before it puts anything
+            // in place, and refuses the copy without.
+            if kind == EngineKind::Strata {
+                let feed = format!(
+                    "https://github.com/{}/releases/download/{version}",
+                    kind.repo()
+                );
+                self.update(key, |i| i.state = "verifying");
+                self.say(
+                    key,
+                    format!("$ strata update --check --no-engine --feed {feed}"),
+                );
+                let checked = tokio::process::Command::new(&binary)
+                    .args(["update", "--check", "--no-engine", "--feed", &feed])
+                    .stdin(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .output();
+                let checked = tokio::time::timeout(Duration::from_secs(120), checked)
+                    .await
+                    .map_err(|_| "the signed feed's check did not finish within 120s".to_string())
+                    .and_then(|run| run.map_err(|e| format!("running the feed check: {e}")));
+                let refused = match checked {
+                    Ok(out) if out.status.success() => None,
+                    Ok(out) => Some(format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout).trim(),
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    )),
+                    Err(why) => Some(why),
+                };
+                if let Some(why) = refused {
+                    let _ = tokio::fs::remove_dir_all(dir).await;
+                    return Err(format!(
+                        "Strata {version}'s signed feed could not be verified, so the copy was \
+                         removed: {why}"
+                    ));
+                }
+                self.say(key, "signed feed verified".into());
+            }
             self.say(key, format!("installed {}", binary.display()));
         }
         Ok(())
     }
+}
+
+/// One line of Strata's `install-manifest.txt`: `<platform> <version>
+/// <file> <sha256> <size>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestLine {
+    pub version: String,
+    pub file: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+/// The line for `platform`, refused unless its file is a plain name in the
+/// release folder — not a path, not a URL — and its digest is one.
+pub fn strata_manifest(text: &str, platform: &str) -> Result<ManifestLine, String> {
+    let fields: Vec<&str> = text
+        .lines()
+        .map(str::split_whitespace)
+        .find_map(|mut fields| (fields.next() == Some(platform)).then(|| fields.collect()))
+        .ok_or_else(|| format!("this Strata release has no Terminal for {platform}"))?;
+    let [version, file, sha256, size, ..] = fields[..] else {
+        return Err(format!(
+            "the manifest's {platform} line is not `platform version file sha256 size`"
+        ));
+    };
+    let plain = |text: &str| {
+        !text.is_empty()
+            && !text.starts_with('.')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+    };
+    if !plain(file) {
+        return Err(format!(
+            "the manifest names `{file}`, which is not a file in the release"
+        ));
+    }
+    let sha256 = sha256.to_ascii_lowercase();
+    if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "the manifest's sha256 for {platform} is not one: `{sha256}`"
+        ));
+    }
+    Ok(ManifestLine {
+        version: version.to_string(),
+        file: file.to_string(),
+        sha256,
+        size: size.parse().unwrap_or(0),
+    })
 }
 
 #[cfg(test)]
@@ -1836,6 +2212,134 @@ mod tests {
         bin.display().to_string()
     }
 
+    /// A stand-in `strata`: `models list` prints two installed models, one of
+    /// them missing a file, and `serve` writes its arguments down and answers
+    /// `/health` on `--port` until a SIGTERM, which it writes down too.
+    /// Copied into place by a child, for the reason `stand_in_ollama` is.
+    fn stand_in_strata(dir: &Path) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        let config = dir.join("strata-qwen-flash.json");
+        std::fs::write(&config, "{}").unwrap();
+        std::fs::write(
+            dir.join("models.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "ok": true,
+                "models": [
+                    {"id": "qwen-flash", "name": "Qwen3.8-Flash-Next",
+                     "source_config": config, "component_status": "present"},
+                    {"id": "ds-big", "source_config": dir.join("strata-ds-big.json"),
+                     "component_status": "missing_or_invalid"},
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("serve.py"),
+            r#"import http.server, os, signal, sys
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+here = os.path.dirname(os.path.abspath(__file__))
+def term(*_):
+    open(os.path.join(here, "termed"), "w").write("TERM")
+    sys.exit(0)
+signal.signal(signal.SIGTERM, term)
+class Health(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == "/health" else 404)
+        self.send_header("content-length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+    def log_message(self, *_):
+        pass
+http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
+"#,
+        )
+        .unwrap();
+        let source = dir.join("strata.src");
+        std::fs::write(
+            &source,
+            "#!/bin/sh\nhere=$(dirname \"$0\")\ncase \"$1\" in\n  models) cat \"$here/models.json\" ;;\n  \
+             serve) echo \"$@\" > \"$here/argv\"; exec python3 \"$here/serve.py\" \"$@\" ;;\n  \
+             *) exit 2 ;;\nesac\n",
+        )
+        .unwrap();
+        let bin = dir.join("strata");
+        let wrote = std::process::Command::new("sh")
+            .args(["-c", r#"cp "$1" "$0" && chmod 755 "$0""#])
+            .arg(&bin)
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(wrote.success());
+        bin.display().to_string()
+    }
+
+    /// A Strata engine is `strata serve` in the foreground, on the run config
+    /// its model's id names and the port luu placed it on; asked to stop, it
+    /// gets a SIGTERM and drains. A model Strata does not have, one missing a
+    /// file, and none at all are each said before anything starts, with the
+    /// command that installs one.
+    #[tokio::test]
+    async fn a_strata_engine_serves_in_the_foreground_on_its_model_s_run_config() {
+        let dir = std::env::temp_dir().join(format!("luu-strata-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let engine = Engine {
+            kind: EngineKind::Strata,
+            binary: Some(stand_in_strata(&dir)),
+            model: Some("qwen-flash".into()),
+            ..Default::default()
+        };
+        let supervisor = Arc::new(Supervisor::default());
+        let port = supervisor.ensure("test-strata", &engine).await.unwrap();
+        let argv = std::fs::read_to_string(dir.join("argv")).unwrap();
+        assert_eq!(
+            argv.trim(),
+            format!(
+                "serve --profile {} --host 127.0.0.1 --port {port}",
+                dir.join("strata-qwen-flash.json").display()
+            )
+        );
+        let status = supervisor.status("test-strata", &engine).await;
+        assert_eq!(status.state, "running");
+        assert!(status.answering);
+        assert!(
+            status.log[0].contains("serve --profile"),
+            "{:?}",
+            status.log
+        );
+        assert_eq!(strata_models_of(&engine).await.unwrap().len(), 2);
+
+        supervisor.stop("test-strata").await;
+        assert!(
+            dir.join("termed").exists(),
+            "stopped by a SIGTERM, not a kill"
+        );
+
+        for (model, says) in [
+            (
+                Some("nope"),
+                "no model `nope` installed (it has qwen-flash, ds-big)",
+            ),
+            (Some("ds-big"), "missing_or_invalid"),
+            (None, "names no model"),
+        ] {
+            let asked = Engine {
+                model: model.map(str::to_string),
+                ..engine.clone()
+            };
+            let error = supervisor.start("test-strata-2", &asked).await.unwrap_err();
+            assert!(error.contains(says), "{error}");
+            if model != Some("ds-big") {
+                assert!(error.contains("strata launch"), "{error}");
+            }
+        }
+        unplace("test-strata");
+        unplace("test-strata-2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// An automatic engine luu itself runs is luu's on every `ensure`, not
     /// only the one that started it. Until 2026-10-27 the second found it
     /// answering on the port luu placed it on and called it somebody else's.
@@ -1973,6 +2477,120 @@ mod tests {
         assert_eq!(
             ollama("linux", "x86_64", Some("rocm")).unwrap(),
             "ollama-linux-amd64-rocm.tar.zst"
+        );
+
+        // Strata's is the manifest's platform, which names the file.
+        let strata =
+            |os, arch, variant| asset_for(EngineKind::Strata, "v0.2.12", variant, os, arch);
+        assert_eq!(strata("linux", "x86_64", None).unwrap(), "linux-x86_64");
+        assert_eq!(strata("linux", "aarch64", None).unwrap(), "linux-aarch64");
+        assert_eq!(strata("macos", "aarch64", None).unwrap(), "macos-arm64");
+        assert_eq!(strata("windows", "x86_64", None).unwrap(), "windows-x86_64");
+        assert!(
+            strata("macos", "x86_64", None).is_err(),
+            "Apple Silicon only"
+        );
+        assert!(
+            strata("linux", "x86_64", Some("cuda")).is_err(),
+            "no variants"
+        );
+    }
+
+    /// The release's own manifest, v0.2.12's as published: the line for this
+    /// platform, and nothing that would put a path or a URL where a file
+    /// name goes, or a digest that is not one.
+    #[test]
+    fn strata_s_manifest_names_one_file_per_platform_and_its_digest() {
+        let published = "\
+linux-x86_64 0.1.58 strata-control-0.1.58-linux-x86_64.tar.gz fcce4c7b90f59c4f10f16181a7190b3abe79faadbc9eef38278fdc635e028817 99974029
+macos-arm64 0.1.58 strata-control-0.1.58-macos-arm64.tar.gz 8c8452c578f25f2ca9331db20defd28090eb7a7dd232382cd1538867d48da3f2 51117393
+windows-x86_64 0.1.58 strata-control-0.1.58-windows-x86_64.zip 5a927d2b2ac61a9d6963fb17b46819f0bbd779875d1f9a6ba0e07834b350077b 73442655
+linux-aarch64 0.1.58 strata-control-0.1.58-linux-aarch64.tar.gz 8a813e0728e5a563d1d75a2643127cc40a2504240801b53ba9222204acab2f8f 83895276
+";
+        assert_eq!(
+            strata_manifest(published, "linux-x86_64").unwrap(),
+            ManifestLine {
+                version: "0.1.58".into(),
+                file: "strata-control-0.1.58-linux-x86_64.tar.gz".into(),
+                sha256: "fcce4c7b90f59c4f10f16181a7190b3abe79faadbc9eef38278fdc635e028817".into(),
+                size: 99974029,
+            }
+        );
+        assert_eq!(
+            strata_manifest(published, "macos-arm64").unwrap().file,
+            "strata-control-0.1.58-macos-arm64.tar.gz"
+        );
+        assert!(strata_manifest(published, "freebsd-x86_64").is_err());
+        let sha = "a".repeat(64);
+        for line in [
+            format!("linux-x86_64 1 ../escape.tar.gz {sha} 1"),
+            format!("linux-x86_64 1 https://elsewhere/x.tar.gz {sha} 1"),
+            format!("linux-x86_64 1 sub/x.tar.gz {sha} 1"),
+            "linux-x86_64 1 x.tar.gz not-a-digest 1".to_string(),
+            "linux-x86_64 1 x.tar.gz".to_string(),
+        ] {
+            assert!(strata_manifest(&line, "linux-x86_64").is_err(), "{line}");
+        }
+    }
+
+    /// `strata models list --installed --output json`, in Strata's envelope:
+    /// the models, the one missing a file with why, a refusal said in its own
+    /// words, and a line of noise before the JSON left alone.
+    #[test]
+    fn strata_s_installed_models_are_read_from_its_own_json() {
+        let listed = r#"note: something Strata printed first
+{"schema_version": 1, "ok": true, "scope": "local_run_configs", "models": [{"id": "qwen-flash", "name": "Qwen3.8-Flash-Next", "source_config": "/m/strata-qwen-flash.json", "context_tokens": 65536, "component_status": "present", "execution_compatibility": "unverified"}, {"id": "ds-big", "source_config": "/m/strata-ds-big.json", "component_status": "missing_or_invalid"}]}"#;
+        let models = parse_strata_models(listed).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "qwen-flash");
+        assert_eq!(models[0].context_tokens, Some(65536));
+        assert_eq!(models[0].servable(), Ok(()));
+        assert!(
+            models[1]
+                .servable()
+                .unwrap_err()
+                .contains("missing_or_invalid")
+        );
+
+        let refused = r#"{"schema_version": 1, "ok": false, "error": {"code": "bad_dir", "message": "no such folder"}}"#;
+        assert!(
+            parse_strata_models(refused)
+                .unwrap_err()
+                .contains("no such folder")
+        );
+        assert!(parse_strata_models("not json at all").is_err());
+    }
+
+    /// A Strata engine starts on whatever model the session asked for: its
+    /// ids are its own, not catalog references, so a plain name moves it.
+    #[test]
+    fn a_session_picks_the_model_its_strata_engine_serves() {
+        let text = "[engine.st]\nkind = \"strata\"\nmodel = \"qwen-flash\"\n\n\
+                    [provider.st]\nbackend = \"openai\"\nengine = \"st\"\n";
+        let config = crate::provider::Config::from_toml(text, "config.toml").unwrap();
+        let resolve = |model| {
+            crate::provider::resolve(
+                &config,
+                Some(Path::new("config.toml")),
+                crate::provider::Flags {
+                    provider: Some("st"),
+                    model,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            for_run(&resolve(None)).unwrap().1.model.as_deref(),
+            Some("qwen-flash")
+        );
+        assert_eq!(
+            for_run(&resolve(Some("ds-big")))
+                .unwrap()
+                .1
+                .model
+                .as_deref(),
+            Some("ds-big")
         );
     }
 
