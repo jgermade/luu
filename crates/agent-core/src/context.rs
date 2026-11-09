@@ -377,6 +377,28 @@ pub fn could_be_read_again(tool: &str) -> bool {
     matches!(tool, "read_file" | "list_dir")
 }
 
+/// What the open job's oldest turns become once pruning has not made the
+/// window fit: the fourth rung, between [`Results`] and eviction.
+///
+/// Decided in `RECORD/2026-11-09.five-decisions.WIP.md` §21 and built in
+/// `RECORD/2026-11-09.fold-behind.completed.md`: an evicted turn leaves no
+/// trace in the prompt, and a turn folded behind leaves its evidence — what it
+/// read and what its tools reported, written from its own steps the way a
+/// closed job's fold is, never by a model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fold {
+    /// Turns go from the window whole, as they always did. The default, and
+    /// every recording made before this enum.
+    #[default]
+    Never,
+    /// Under pressure, the oldest turns not already folded become one summary
+    /// of their evidence, below a line that only moves forward — the floor's
+    /// shape, and [`Prune::Behind`]'s. Eviction runs after it, for a window the
+    /// summary does not save.
+    Behind,
+}
+
 /// The window, what is held back from it, and how it gives way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -394,6 +416,8 @@ pub struct Budget {
     /// line. Inert without [`Prune::Behind`]: nothing is behind a line that
     /// never moves.
     pub results: Results,
+    /// What the oldest turns become before any is evicted. See [`Fold`].
+    pub fold: Fold,
 }
 
 impl Budget {
@@ -412,6 +436,7 @@ impl Budget {
             repeat: Repeat::Once,
             prune: Prune::Never,
             results: Results::Kept,
+            fold: Fold::Never,
         }
     }
 
@@ -436,6 +461,12 @@ impl Budget {
     /// unrecorded one.
     pub fn citing(self, results: Results) -> Self {
         Self { results, ..self }
+    }
+
+    /// Off by default, and measured before it is on: an arm of roadmap row 38's
+    /// run. See [`Fold`].
+    pub fn folding(self, fold: Fold) -> Self {
+        Self { fold, ..self }
     }
 }
 
@@ -462,6 +493,12 @@ pub struct Selection {
     /// What this selection pruned, if the line moved. `None` on a selection
     /// that pruned nothing, which is every one made under [`Prune::Never`].
     pub pruning: Option<Pruned>,
+    /// The fold-behind line: turns below it (and above the floor) are sent as
+    /// one summary. An index into the session's turns, and a ratchet.
+    pub behind: usize,
+    /// What this selection folded behind, if the line moved. `None` on every
+    /// selection made under [`Fold::Never`].
+    pub folding: Option<FoldedBehind>,
     /// What rule A kept out of this render. `None` when it kept nothing out,
     /// which is every selection made under [`Repeat::Always`] and every one
     /// under [`Repeat::Once`] whose window carries no span twice.
@@ -483,6 +520,19 @@ pub struct Selection {
     /// re-sends what it selected and the blocks read as per-turn snapshots — so
     /// a run made without rule A cannot be quietly changed by rule A's repair.
     pub superseded: Vec<Superseded>,
+}
+
+/// What one selection folded behind: the turns that now go out as one summary,
+/// what the window had held for them, and what the summary costs instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FoldedBehind {
+    pub turns: Vec<TurnId>,
+    /// What those turns cost in the window before the fold, under the rules
+    /// in force.
+    pub tokens: u32,
+    /// What the summary that replaced them costs.
+    pub summary_tokens: u32,
+    pub counter: Counter,
 }
 
 /// What one selection dropped from the window — and it stays dropped: the
@@ -662,6 +712,9 @@ enum Item {
         /// Index of the job's first turn still above the floor.
         first: usize,
     },
+    /// Turns of a job still open, below the fold-behind line: one summary of
+    /// `turns[first..end]`.
+    Behind { first: usize, end: usize },
 }
 
 impl Item {
@@ -670,6 +723,7 @@ impl Item {
         match self {
             Self::Turn(index) => *index,
             Self::Folded { first, .. } => *first,
+            Self::Behind { first, .. } => *first,
         }
     }
 }
@@ -700,6 +754,10 @@ pub struct Context {
     /// forward only, and only under [`Prune::Behind`]. Never below the floor,
     /// because a turn nobody renders has nothing to give up.
     pruned: usize,
+    /// The fold-behind line: the turns of an open job between the floor and
+    /// here go out as one summary of their evidence. Moves forward only, and
+    /// only under [`Fold::Behind`].
+    behind: usize,
     /// What the line took, the last time the window was rendered — the other
     /// half of the state above. The line says *which* turns gave something up
     /// and this says *what*, and a fold reads both: what it stopped sending is
@@ -796,6 +854,7 @@ impl Context {
             turns: Vec::new(),
             floor: 0,
             pruned: 0,
+            behind: 0,
             cited: Results::Kept,
             resending: Repeat::Always,
             authority_note: None,
@@ -1026,6 +1085,10 @@ impl Context {
                 // here would say a turn had given up spans that are, as of
                 // this moment, in its `code_context`.
                 pruned: 0,
+                // Zero for the prune line's reason: a fact about the last
+                // render. A resumed session sends those turns whole until a
+                // window that does not fit folds them again.
+                behind: 0,
                 // The last render's rule, and a resumed session has not
                 // rendered: the next selection sets it from the budget it is
                 // given.
@@ -1483,6 +1546,16 @@ impl Context {
                     }
                     items.push(Item::Folded { job: id, first });
                 }
+                None if index < self.behind => {
+                    let first = index;
+                    while index < self.behind
+                        && index < self.turns.len()
+                        && !self.job(self.turns[index].job).is_some_and(Job::is_closed)
+                    {
+                        index += 1;
+                    }
+                    items.push(Item::Behind { first, end: index });
+                }
                 None => {
                     items.push(Item::Turn(index));
                     index += 1;
@@ -1490,6 +1563,43 @@ impl Context {
             }
         }
         items
+    }
+
+    /// The two messages a fold behind sends: the person's own prompts, as they
+    /// were typed, and the evidence their turns left. The prompts and not an
+    /// invented sentence, the fold's own rule: what was asked is a fact, and a
+    /// paraphrase of it is prose in the one place this design keeps prose out.
+    fn behind_messages(
+        &self,
+        first: usize,
+        end: usize,
+        counter: &dyn TokenCounter,
+    ) -> (String, String) {
+        let turns = &self.turns[first..end];
+        let asked = turns
+            .iter()
+            .map(|turn| format!("[turn {}] {}", turn.id, turn.prompt))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let objective = self
+            .job(turns[0].job)
+            .map(|job| job.objective.as_str())
+            .unwrap_or_default();
+        let steps: Vec<&ToolStep> = turns.iter().flat_map(|turn| turn.steps.iter()).collect();
+        let shown: Vec<&Fragment> = turns
+            .iter()
+            .flat_map(|turn| turn.code_context.iter())
+            .collect();
+        let text = crate::job::behind_text(
+            objective,
+            turns[0].id,
+            turns[turns.len() - 1].id,
+            &steps,
+            &shown,
+            turns.len(),
+            counter,
+        );
+        (asked, text)
     }
 
     /// What an item costs in the prompt it renders into, under a prune line
@@ -1557,6 +1667,10 @@ impl Context {
                         }
                     }
                 }
+            }
+            Item::Behind { first, end } => {
+                let (asked, text) = self.behind_messages(*first, *end, counter);
+                counter.count(&asked) + counter.count(&text)
             }
             Item::Folded { job, .. } => self
                 .job(*job)
@@ -1634,6 +1748,7 @@ impl Context {
 
         let mut eviction = None;
         let mut pruning = None;
+        let mut folding = None;
         if let Some(limit) = budget.limit {
             // The current turn and the reserve are not negotiable: nothing here
             // may trim the prompt the user just typed. If they alone exceed the
@@ -1711,6 +1826,68 @@ impl Context {
                     )),
                     counter: counter.id(),
                 });
+            }
+
+            // Folding behind next: what pruning did not save is the turns'
+            // question, answer and output, and a fold keeps their evidence
+            // where eviction keeps nothing. The floor moves after, and only for
+            // a window the summary does not save either.
+            if budget.fold == Fold::Behind
+                && self.fits_from(
+                    available,
+                    counter,
+                    budget.repeat,
+                    self.pruned,
+                    budget.results,
+                    &current,
+                ) > self.floor
+            {
+                let before = self.behind.max(self.floor);
+                let held = self.window_tokens(
+                    self.floor,
+                    counter,
+                    budget.repeat,
+                    self.pruned,
+                    budget.results,
+                    &current,
+                );
+                self.fold_to(target, counter, budget.repeat, budget.results, &current);
+                if self.behind > before {
+                    let after = self.window_tokens(
+                        self.floor,
+                        counter,
+                        budget.repeat,
+                        self.pruned,
+                        budget.results,
+                        &current,
+                    );
+                    let summary_tokens = self
+                        .items()
+                        .iter()
+                        .filter_map(|item| match item {
+                            Item::Behind { .. } => Some(self.item_tokens(
+                                item,
+                                counter,
+                                self.pruned,
+                                budget.results,
+                                &current,
+                            )),
+                            _ => None,
+                        })
+                        .sum();
+                    folding = Some(FoldedBehind {
+                        turns: self.turns[before..self.behind]
+                            .iter()
+                            .filter(|turn| !self.job(turn.job).is_some_and(Job::is_closed))
+                            .map(|turn| turn.id)
+                            .collect(),
+                        // What the window gave up for the fold, plus what the
+                        // summary now costs: the turns' own cost before it.
+                        tokens: held.saturating_sub(after) + summary_tokens,
+                        summary_tokens,
+                        counter: counter.id(),
+                    });
+                }
             }
 
             if self.fits_from(
@@ -1889,6 +2066,15 @@ impl Context {
                     }
                     messages.push(Message::assistant(turn.answer.clone()));
                 }
+                Item::Behind { first, end } => {
+                    // Counted with the summaries rather than the history: it is
+                    // a summary, and the bar that shows a block replaced by a
+                    // line is the one the panel exists to watch.
+                    summary_tokens += tokens;
+                    let (asked, text) = self.behind_messages(*first, *end, counter);
+                    messages.push(Message::user(asked));
+                    messages.push(Message::assistant(text));
+                }
                 Item::Folded { job, .. } => {
                     summary_tokens += tokens;
                     // One exchange, so the alternation a folded block sits in
@@ -1961,6 +2147,8 @@ impl Context {
             pruned: self.pruned,
             eviction,
             pruning,
+            behind: self.behind,
+            folding,
             // `None` and not a zeroed struct, on `eviction`'s and `pruning`'s
             // own semantics: a selection that collapsed nothing has nothing to
             // report, and a report of zero would put a `repeated` line in every
@@ -2118,6 +2306,45 @@ impl Context {
             }
         }
         best
+    }
+
+    /// Moves the fold-behind line as little as brings the window under
+    /// `target`, or — where no line does — to the one that leaves it smallest.
+    /// [`Self::prune_to`]'s rule and for its reason: the line is a ratchet, so
+    /// what it folds now stays folded, and a summary can cost more than the
+    /// turns it replaces (a short turn that read a long file), so the walk
+    /// keeps the minimum rather than trusting the first line it reaches.
+    ///
+    /// `&mut self` because the line is what [`Self::items_from`] reads: each
+    /// candidate is tried in place, and the one chosen is left there.
+    fn fold_to(
+        &mut self,
+        target: u32,
+        counter: &dyn TokenCounter,
+        repeat: Repeat,
+        results: Results,
+        current: &Current,
+    ) {
+        let start = self.behind.max(self.floor);
+        self.behind = start;
+        let mut best = start;
+        let mut smallest =
+            self.window_tokens(self.floor, counter, repeat, self.pruned, results, current);
+        let mut line = start;
+        while smallest > target && line < self.turns.len() {
+            line += 1;
+            self.behind = line;
+            let cost =
+                self.window_tokens(self.floor, counter, repeat, self.pruned, results, current);
+            if cost < smallest {
+                best = line;
+                smallest = cost;
+            }
+            if cost <= target {
+                return;
+            }
+        }
+        self.behind = best;
     }
 
     /// The stored count, unless it was produced by a different counter — in
@@ -4997,6 +5224,151 @@ mod tests {
         assert_eq!(
             replaced.tokens, sent,
             "what the fold stopped sending is what the prompt was made of",
+        );
+    }
+
+    /// Six turns whose tool output is most of their cost, the case a fold
+    /// behind is for: what it keeps (the action and its status) is small next
+    /// to what it drops (the output).
+    fn read_step(output: &str) -> crate::tools::ToolStep {
+        crate::tools::ToolStep {
+            text: "reading".into(),
+            call: ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({}),
+            },
+            index: 1,
+            outcome: ToolOutcome::ok(Verdict::allow("test", Applied::Process), output),
+            duration_ms: 1,
+            asked: None,
+            grant: None,
+        }
+    }
+
+    fn context_with_outputs(counter: &dyn TokenCounter) -> Context {
+        let mut context = Context::new("system prompt here");
+        let output = "word ".repeat(40);
+        for n in 0..6 {
+            context.push_turn_with_steps(
+                n as TurnId + 1,
+                format!("question number {n}"),
+                format!("answer number {n}"),
+                vec![],
+                vec![read_step(&output)],
+                counter,
+            );
+        }
+        context
+    }
+
+    /// Row 21: under [`Fold::Behind`] the oldest turns become one summary of
+    /// their evidence instead of leaving the prompt, and the person's own
+    /// prompts go with it. The window still alternates.
+    #[test]
+    fn folding_behind_keeps_evidence_where_eviction_kept_nothing() {
+        let counter = WordCounter::default();
+        let budget = Budget::new(160, 4, Eviction::Turn);
+
+        let mut evicting = context_with_outputs(&counter);
+        let cut = evicting.select("now this", &[], budget, &counter);
+        assert!(
+            cut.eviction.is_some(),
+            "the case overflows: {:?}",
+            cut.buckets
+        );
+        assert!(cut.folding.is_none(), "off by default");
+
+        let mut folding = context_with_outputs(&counter);
+        let folded = folding.select("now this", &[], budget.folding(Fold::Behind), &counter);
+        let report = folded.folding.as_ref().expect("the line moved");
+        assert!(
+            folded.eviction.is_none(),
+            "the summary was enough: {:?}",
+            folded.buckets
+        );
+        assert!(report.summary_tokens < report.tokens, "{report:?}");
+        assert_eq!(
+            report.turns,
+            (1..=report.turns.len() as TurnId).collect::<Vec<_>>()
+        );
+
+        let texts: Vec<&str> = folded.messages.iter().map(|m| m.content.as_str()).collect();
+        let summary = texts
+            .iter()
+            .find(|t| t.contains("compacted to stay in the window"))
+            .expect("a summary in the window");
+        assert!(summary.contains("read_file — ok"), "{summary}");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("[turn 1] question number 0")),
+            "the person's own words go with it: {texts:?}"
+        );
+        let roles: Vec<Role> = folded.messages.iter().map(|m| m.role).collect();
+        for (index, role) in roles[1..].iter().enumerate() {
+            let expected = match index % 2 {
+                0 => Role::User,
+                _ => Role::Assistant,
+            };
+            assert_eq!(*role, expected, "message {} of {roles:?}", index + 1);
+        }
+    }
+
+    /// The line is a ratchet: asked again with nothing new, the window is the
+    /// same bytes and nothing is folded again — a prefix cache pays once per
+    /// move, not once per call.
+    #[test]
+    fn a_fold_behind_is_byte_identical_until_the_line_moves() {
+        let counter = WordCounter::default();
+        let budget = Budget::new(160, 4, Eviction::Turn).folding(Fold::Behind);
+        let mut context = context_with_outputs(&counter);
+        let first = context.select("now this", &[], budget, &counter);
+        let second = context.select("now this", &[], budget, &counter);
+        assert!(first.folding.is_some());
+        assert!(second.folding.is_none(), "nothing new to fold");
+        assert_eq!(first.behind, second.behind);
+        let text = |s: &Selection| {
+            s.messages
+                .iter()
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(text(&first), text(&second));
+    }
+
+    /// A closed job is already one summary, and a fold behind does not reach
+    /// into it: only the open job's turns are folded.
+    #[test]
+    fn a_fold_behind_leaves_a_closed_job_s_fold_alone() {
+        let counter = WordCounter::default();
+        let (mut context, task) = context_with_closed_task(0, &counter);
+        let output = "word ".repeat(40);
+        for n in 0..6 {
+            context.push_turn_with_steps(
+                n as TurnId + 10,
+                format!("later question {n}"),
+                format!("later answer {n}"),
+                vec![],
+                vec![read_step(&output)],
+                &counter,
+            );
+        }
+        let folded = context.select(
+            "now this",
+            &[],
+            Budget::new(200, 4, Eviction::Turn).folding(Fold::Behind),
+            &counter,
+        );
+        let report = folded.folding.expect("the open job's turns folded");
+        assert!(
+            report.turns.iter().all(|id| *id >= 10),
+            "{:?}",
+            report.turns
+        );
+        let objective = &context.job(task).unwrap().objective;
+        assert!(
+            folded.messages.iter().any(|m| m.content == *objective),
+            "the closed job is still its own fold"
         );
     }
 }

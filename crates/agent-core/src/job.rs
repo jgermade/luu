@@ -744,6 +744,42 @@ fn summary_text(
         }
     }
 
+    text.push_str(&summary_body(steps, shown, turns, counter));
+    text
+}
+
+/// What the turns below a fold-behind line become: the same evidence a closed
+/// job's fold carries, under a header that says what it is — part of the job
+/// that is still open, compacted to keep the window — rather than a job that
+/// ended. See `RECORD/2026-11-09.fold-behind.completed.md`.
+pub(crate) fn behind_text(
+    objective: &str,
+    first: u64,
+    last: u64,
+    steps: &[&ToolStep],
+    shown: &[&Fragment],
+    turns: usize,
+    counter: &dyn TokenCounter,
+) -> String {
+    let span = match first == last {
+        true => format!("turn {first}"),
+        false => format!("turns {first}-{last}"),
+    };
+    let mut text = format!("[{span} compacted to stay in the window] {objective}\n");
+    text.push_str(&summary_body(steps, shown, turns, counter));
+    text
+}
+
+/// Everything a summary carries below its header: what the turns were shown,
+/// and what their tools reported. Shared by a closed job's fold and a fold
+/// behind, so the two cannot drift into two notions of *evidence*.
+fn summary_body(
+    steps: &[&ToolStep],
+    shown: &[&Fragment],
+    turns: usize,
+    counter: &dyn TokenCounter,
+) -> String {
+    let mut text = String::new();
     let shown = quoted(shown, counter);
     if !shown.is_empty() {
         text.push_str(&format!("shown, from {turns} turn(s):\n"));
