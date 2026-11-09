@@ -113,6 +113,11 @@ impl LocalModel {
             (EngineKind::Ollama, _, _) => {
                 Err("not in ollama's store: ollama serves the models it pulled".into())
             }
+            (EngineKind::Strata, _, _) => Err(
+                "Strata serves the models `strata launch` installed, as its own run configs: \
+                 not a file from here"
+                    .into(),
+            ),
         }
     }
 }

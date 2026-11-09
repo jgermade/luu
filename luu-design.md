@@ -1147,7 +1147,10 @@ access = "execute"
   machine only) and offered first; an image a posture or an environment names is still
   offered after them until postures go
   ([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
-  §2). The shell,
+  §2), and last the one `serve` was started on (`--worker-image`, or its own `[worker]
+  image`) — which the flag moves every offered place onto, and which the chart's
+  `--worker kubernetes` makes the only one
+  ([`RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`](RECORD/2026-11-08.the-image-serve-was-started-on.completed.md)). The shell,
   network and files lists by name, an unchosen one the empty list (read the folder, ask the
   rest), what the last session used offered first — the runtime with what choosing it means
   beside it, as tall as the field's box: this machine as the person, its terminal the whole
@@ -2567,6 +2570,19 @@ report none even then. `None` is *not reported*; zero would claim the server saw
 an empty prompt, in exactly the number the budget panel plots against ours. See
 [`RECORD/2026-09-01.an-openai-compatible-backend.completed.md`](RECORD/2026-09-01.an-openai-compatible-backend.completed.md).
 
+**Reasoning in a field of its own streams up as `<think>…</think>`** on the
+`openai` backend too — `delta.reasoning_content` (DeepSeek, Alibaba Cloud's
+compatible mode, vLLM) or `delta.reasoning` (OpenRouter, llama-server) — so it is
+masked and folded like every other model's. And **a reply's thinking goes back
+only to the destination that wrote it**: the backend remembers the replies with
+thinking it streamed (a hash of the model and the text, 4096 of them, per backend,
+so per destination), sends those back as they came — interleaved thinking on every
+step of a tool loop, and `<think>` inline in `content` as MiniMax's API returns it —
+and cuts the thinking out of any other: another provider's before a switch, or a
+reply luu edited. One left empty is dropped and the prompts around it joined, so the
+roles still alternate. See
+[`RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md`](RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md).
+
 ### The Anthropic-compatible backend, and the thinking it keeps
 
 **A third is built**: `anthropic` (`POST /v1/messages`, SSE), for Anthropic's own
@@ -2772,6 +2788,23 @@ chosen over `mlx_lm.server` by measurement on this machine: 90–92 against 79�
 a first token in ~32 ms against ~125 ms, same MLX weights. It also loads GGUF through an embedded
 llama.cpp — an ollama blob is handed to it as a `.gguf` link, because it tells the two apart by
 extension.
+**`strata` is Strata's `strata serve`** — large mixture-of-experts models on one consumer GPU,
+spoken to as `openai` — and it differs from the other three in where its models come from.
+**luu's own copy** is the release's *Terminal* (the CLI and its own Python, ~100 MB, `v0.2.12`):
+the archive `install-manifest.txt` names for this platform, checked against GitHub's sha256
+*and* the manifest's, which must agree, then the release's signed feed checked by the binary
+just verified (`strata update --check --no-engine`), as Strata's own installer does — a copy
+that fails it is removed. **It runs in the foreground**, `strata serve --profile <run config>
+--host 127.0.0.1 --port <placed>`, ready when `/health` answers (Strata loads before it binds),
+and is **stopped with a SIGTERM**, killed only if it has not drained in 10 s. **Its models are
+its own**: the run configs `strata launch` installed, by id, read from `strata models list
+--installed --output json` — never the catalog's files, which `runs_on` says for every one of
+them. A model's id is what a session and the sheet name; a run config's path may be written in
+the file, never from the page. A model missing a file is listed greyed with Strata's reason,
+and installing one — the GPU engine and tens to hundreds of GB — stays `strata launch`, which
+the page names: luu does not download a model. Its reasoning arrives in `reasoning_content`
+and its window at `/props`, both already read. See
+[`RECORD/2026-11-08.strata-as-an-engine.WIP.md`](RECORD/2026-11-08.strata-as-an-engine.WIP.md).
 
 **It is all automatic.** luu's own copy is downloaded the first time a session needs it; the
 engine starts then; a session that picks another model restarts a llama.cpp engine on it (it
@@ -2986,11 +3019,18 @@ once** ([`RECORD/2026-10-30.sessions-side-by-side.WIP.md`](RECORD/2026-10-30.ses
 agency (worker, container), grants, fold, stream and event channel — and which one was
 used most recently. `POST /api/sessions` makes one **beside** the others, built on
 `LiveSession::blank`, and makes it current; `POST /api/sessions/:id/resume` makes a stored
-one live the same way, or, when it is already live, attaches to it as it is. Neither ends
-anything: a turn in one runs while another is on screen. **Addressed by `?session=<id>`** on
-`/ws` and on any route (a middleware puts it in a task-local, `App::addressed`); without it,
-a route acts on the current one and a socket follows the current one, saying `hello` again
-when it changes. **`[sessions] max-live`** (4) bounds them: one more puts the least recently
+one live the same way, or, when it is already live, attaches to it as it is — **unless the
+body names another provider or model**: then it is moved, between turns (`409` while a turn
+runs or its gate waits), by the same resume run on its own checkpoint under the posture and
+agency it already has, rebuilt under its id with the history re-folded for the new destination
+and a header where it changed; an engine only the old destination used is released. That is
+the picker's switch and *Continue here*, which until 2026-11-08 attached and moved nothing
+([`RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md`](RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md)).
+Neither ends anything: a turn in one runs while another is on screen. **Addressed by
+`?session=<id>`** on `/ws` and on any route (a middleware puts it in a task-local,
+`App::addressed`); without it, a route acts on the current one and a socket follows the
+current one, saying `hello` again when it changes. A socket that names a session keeps to that
+id, so it follows a move too. **`[sessions] max-live`** (4) bounds them: one more puts the least recently
 used idle one to sleep — checkpointed, its worker ended, out of the map, resumed when opened —
 and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
 the current one, one with a client, a turn or a proposal never sleeps. `DELETE
@@ -3003,7 +3043,10 @@ that folder's — roadmap row 49's *the folder chosen becomes the session's base
 filter*. `record::Posture` names it (`record::FORMAT` 27) and a resume makes the session again
 there; a runtime or posture move keeps it. `PUT /api/session/folder` moves a session **before
 its first turn** — after it, its history is about the tree it worked in, and another folder is
-another session. The folder picker browses the root (`GET /api/folders`), *Use this folder*
+another session. The folder picker browses the root (`GET /api/folders`) and makes a folder
+in it (`POST /api/folders {path, name}`: one name, one level, never over what is there, through
+a sandbox granting `read-write` on the root alone; who may is who may rename a file — this
+machine, or a user in their own folder), going into the one it made. *Use this folder*
 moves a fresh session and is remembered for the next ones, and `/api/settings` says `root`,
 `folder` and the other live sessions `shared_with` it. **The page shows them**: each row of
 `GET /api/sessions` that is live carries `live: { state, current }` — `running`, `gate`

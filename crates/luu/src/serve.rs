@@ -2192,7 +2192,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/live", axum::routing::delete(end_live))
-        .route("/api/folders", get(get_folders))
+        .route("/api/folders", get(get_folders).post(post_folders))
         .route(
             "/api/session/folder",
             axum::routing::put(put_session_folder),
@@ -2274,6 +2274,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines/{name}/rename", post(rename_engine))
         .route("/api/engines/{name}/chat", post(chat_engine))
         .route("/api/engines/{name}/start", post(start_engine))
+        .route("/api/engines/{name}/models", get(get_engine_models))
         .route("/api/engines/{name}/stop", post(stop_engine))
         // Other machines' `luu serve`, reached through this one: the list, and
         // everything a page served under `/h/<name>/` asks of its API. See
@@ -4168,12 +4169,18 @@ async fn run_protocol_socket(
 
     loop {
         tokio::select! {
-            Ok(()) = changed.changed(), if following => {
+            Ok(()) = changed.changed() => {
                 let (whose, _) = changed.borrow_and_update().clone();
                 if whose != owner {
                     continue;
                 }
-                let Some(now) = app.current_of(&owner) else {
+                let now = match following {
+                    true => app.current_of(&owner),
+                    // Named, it keeps to its session — which a move to another
+                    // destination rebuilds under the same id.
+                    false => rebuilt(&app, &live).await,
+                };
+                let Some(now) = now else {
                     continue;
                 };
                 if Arc::ptr_eq(&now, &live) {
@@ -4248,11 +4255,26 @@ async fn run_protocol_socket(
                     }
                     _ => {}
                 }
+                // A message that arrived before the notice of a move: it is
+                // for the session as it is now, not the one the move replaced.
+                if let Some(now) = rebuilt(&app, &live).await {
+                    live = now;
+                    _attached = Attached::new(live.clone());
+                    events = live.events.subscribe();
+                }
                 live.touch();
                 handle_client_message(&app, &live, message).await;
             }
         }
     }
+}
+
+/// The session `live` was rebuilt as, when a move to another destination
+/// replaced it under its own id (`resume_session`); `None` when it is still
+/// the one live, or no longer live at all.
+async fn rebuilt(app: &App, live: &Arc<LiveSession>) -> Option<Arc<LiveSession>> {
+    let id = live.session_id.lock().await.clone();
+    app.live(&id).filter(|now| !Arc::ptr_eq(now, live))
 }
 
 async fn handle_client_message(app: &Arc<App>, live: &Arc<LiveSession>, message: ClientMessage) {
@@ -6250,7 +6272,7 @@ async fn post_workspace_rename(
     headers: axum::http::HeaderMap,
     Json(request): Json<RenameRequest>,
 ) -> Response {
-    if let Err(refused) = workspace_writable(&state, &headers) {
+    if let Err(refused) = workspace_writable(&state, &headers, "renaming") {
         return *refused;
     }
     let sandbox = workspace_sandbox(&state).await;
@@ -6262,10 +6284,12 @@ async fn post_workspace_rename(
 
 /// Whether this request may change the workspace: a server bound on loopback,
 /// asked by the name it was dialled by. [`engines_allowed`]'s two halves, with
-/// the refusals said about files.
+/// the refusals said about files. `doing` is what the request does, as a
+/// gerund — `renaming`, `making a folder` — so the refusal names it.
 fn workspace_writable(
     state: &AppRouterState,
     headers: &axum::http::HeaderMap,
+    doing: &str,
 ) -> Result<(), Box<Response>> {
     let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
     // A user's own session's folder: the sandbox below is theirs.
@@ -6273,11 +6297,10 @@ fn workspace_writable(
         return Ok(());
     }
     if !state.providers_editable {
-        return Err(refuse(
-            "this server is bound off loopback, and renaming changes this machine's files. \
-             Rename from a browser on the machine itself."
-                .to_string(),
-        ));
+        return Err(refuse(format!(
+            "this server is bound off loopback, and {doing} changes this machine's files. \
+             Do it from a browser on the machine itself."
+        )));
     }
     let host = headers
         .get(header::HOST)
@@ -6286,7 +6309,8 @@ fn workspace_writable(
     match host_is_loopback(host) {
         true => Ok(()),
         false => Err(refuse(format!(
-            "Host `{host}` is not this machine, and only this machine renames its files"
+            "Host `{host}` is not this machine, and only this machine changes its files \
+             ({doing} was asked)"
         ))),
     }
 }
@@ -8906,11 +8930,23 @@ struct Discovered {
     path: String,
 }
 
-const KINDS: [crate::provider::EngineKind; 3] = [
+const KINDS: [crate::provider::EngineKind; 4] = [
     crate::provider::EngineKind::Llama,
     crate::provider::EngineKind::Mlx,
     crate::provider::EngineKind::Ollama,
+    crate::provider::EngineKind::Strata,
 ];
+
+/// Whether `model` may be named from the page as a Strata model: an id out of
+/// `strata models list`, never a path — a run config the page could name is
+/// any file this machine has. A path is the file's to write.
+fn strata_id(model: &str) -> bool {
+    !model.is_empty()
+        && !model.starts_with('.')
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
 
 async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::provider::ConfigError> {
     let (config, path) = load_config().await?;
@@ -9325,15 +9361,6 @@ async fn start_engine(
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(str::to_string);
-    if let Some(model) = &model
-        && !crate::models::is_reference(model)
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("{model} is not a model on this machine: from this page an engine starts on one out of the catalog"),
-        )
-            .into_response();
-    }
     let engine = match load_config().await {
         Ok((config, _)) => config.engines().get(&name).cloned(),
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
@@ -9345,6 +9372,23 @@ async fn start_engine(
         )
             .into_response();
     };
+    if let Some(model) = &model {
+        let strata = engine.kind == crate::provider::EngineKind::Strata;
+        if strata && !strata_id(model) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("{model} is not a Strata model id: from this page a Strata engine starts on one `strata models list` names"),
+            )
+                .into_response();
+        }
+        if !strata && !crate::models::is_reference(model) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("{model} is not a model on this machine: from this page an engine starts on one out of the catalog"),
+            )
+                .into_response();
+        }
+    }
     if let Some(model) = model
         && engine.kind != crate::provider::EngineKind::Ollama
     {
@@ -9417,6 +9461,65 @@ async fn place_engine(name: &str, engine: &crate::provider::Engine) -> Option<u1
     blocking(move || crate::engines::place(&name, kind, &fixed)).await
 }
 
+/// `GET /api/engines/{name}/models`: what a Strata engine can start on, asked
+/// of Strata — its sheet's list, in the catalog's shape (`reference`, `name`,
+/// `label`, `badge`, `cannot`) so the sheet draws both the same way, and a
+/// `reason` where there is none. Only for Strata: every other kind's models
+/// are the catalog's, `GET /api/models`.
+async fn get_engine_models(Path(name): Path<String>) -> Response {
+    let engine = match load_config().await {
+        Ok((config, _)) => config.engines().get(&name).cloned(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(engine) = engine else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    if engine.kind != crate::provider::EngineKind::Strata {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "{name} is a {} engine: its models are the catalog's, GET /api/models",
+                engine.kind.as_str()
+            ),
+        )
+            .into_response();
+    }
+    match crate::engines::strata_models_of(&engine).await {
+        Ok(installed) => {
+            let models: Vec<serde_json::Value> = installed
+                .into_iter()
+                .map(|model| {
+                    let name = model.name.clone().unwrap_or_else(|| model.id.clone());
+                    let cannot = match model.servable() {
+                        Ok(()) => serde_json::json!({}),
+                        Err(why) => serde_json::json!({ "strata": why }),
+                    };
+                    serde_json::json!({
+                        "reference": model.id,
+                        "name": name,
+                        "label": format!("{name} ({})", model.id),
+                        "badge": ["strata"],
+                        "context_tokens": model.context_tokens,
+                        "cannot": cannot,
+                    })
+                })
+                .collect();
+            let reason = models.is_empty().then(|| {
+                format!(
+                    "Strata has no model installed. {}",
+                    crate::engines::STRATA_INSTALL_HINT
+                )
+            });
+            Json(serde_json::json!({ "models": models, "reason": reason })).into_response()
+        }
+        Err(reason) => Json(serde_json::json!({ "models": [], "reason": reason })).into_response(),
+    }
+}
+
 /// The first free port for a kind, from its own upward: what the form and
 /// *use* write, and what the start sheet offers to move a busy engine to. See
 /// [`crate::engines::free_port`].
@@ -9427,6 +9530,7 @@ async fn free_engine_port(
         Some("llama") | None => crate::provider::EngineKind::Llama,
         Some("mlx") => crate::provider::EngineKind::Mlx,
         Some("ollama") => crate::provider::EngineKind::Ollama,
+        Some("strata") => crate::provider::EngineKind::Strata,
         Some(other) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -9504,7 +9608,8 @@ async fn chat_engine(
     let named = match (&model, ollama) {
         (Some(model), true) => model.strip_prefix("ollama:").unwrap_or(model).to_string(),
         (Some(model), false) => {
-            if !crate::models::is_reference(model) {
+            let strata = engine.kind == crate::provider::EngineKind::Strata;
+            if (strata && !strata_id(model)) || (!strata && !crate::models::is_reference(model)) {
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     format!("{model} is not a model on this machine"),
@@ -10025,7 +10130,20 @@ async fn get_provider_models(
     let local_engine = resolved
         .engine
         .as_ref()
-        .filter(|(_, e)| e.kind != crate::provider::EngineKind::Ollama)
+        .filter(|(_, e)| {
+            !matches!(
+                e.kind,
+                crate::provider::EngineKind::Ollama | crate::provider::EngineKind::Strata
+            )
+        })
+        .map(|(_, e)| e.clone());
+    // A Strata engine serves what Strata installed, asked of Strata: its run
+    // configs, by id, the ones missing a file beside them with why. Never the
+    // catalog, which is files Strata does not read.
+    let strata_engine = resolved
+        .engine
+        .as_ref()
+        .filter(|(_, e)| e.kind == crate::provider::EngineKind::Strata)
         .map(|(_, e)| e.clone());
     let mut labels = std::collections::BTreeMap::new();
     let mut badges: std::collections::BTreeMap<String, Vec<&'static str>> =
@@ -10036,82 +10154,113 @@ async fn get_provider_models(
         _ => vec!["system", "ollama"],
     };
     let mut unavailable = Vec::new();
-    let (models, reason) = match &local_engine {
-        Some(engine) => {
-            let catalog = tokio::task::spawn_blocking(crate::models::catalog)
-                .await
-                .unwrap_or_default();
-            let mut models: Vec<String> = Vec::new();
-            if let Some(own) = &engine.model {
-                models.push(own.clone());
-                labels.insert(own.clone(), crate::models::label(own));
-            }
-            for model in catalog {
-                match model.runs_on(engine.kind) {
-                    Ok(()) => {
-                        if !models.contains(&model.reference) {
-                            models.push(model.reference.clone());
+    let (models, reason) = match (&local_engine, &strata_engine) {
+        (None, Some(engine)) => match crate::engines::strata_models_of(engine).await {
+            Ok(installed) => {
+                let mut models = Vec::new();
+                for model in installed {
+                    let label = model.name.clone().unwrap_or_else(|| model.id.clone());
+                    match model.servable() {
+                        Ok(()) => {
+                            badges.insert(model.id.clone(), vec!["strata"]);
+                            labels.insert(model.id.clone(), label);
+                            models.push(model.id);
                         }
-                        badges.insert(model.reference.clone(), model.badge);
-                        labels.insert(model.reference, model.name);
-                    }
-                    Err(reason) => unavailable.push(Unavailable {
-                        model: model.reference,
-                        label: model.name,
-                        badge: model.badge,
-                        reason,
-                    }),
-                }
-            }
-            let reason = models.is_empty().then(|| {
-                format!(
-                    "no model this {} engine loads in ollama, llama.cpp, Hugging Face or luu's \
-                     own models directory",
-                    engine.kind.as_str()
-                )
-            });
-            (models, reason)
-        }
-        None => match backend.models().await {
-            Ok(models) => {
-                // Named by where they came from, the way the catalog is.
-                if resolved.kind == crate::provider::BackendKind::Ollama {
-                    for model in &models {
-                        badges.insert(model.clone(), ollama_badge.clone());
+                        Err(reason) => unavailable.push(Unavailable {
+                            model: model.id,
+                            label,
+                            badge: vec!["strata"],
+                            reason,
+                        }),
                     }
                 }
-                (models, None)
+                let reason = models.is_empty().then(|| {
+                    format!(
+                        "Strata has no model installed that it can serve. {}",
+                        crate::engines::STRATA_INSTALL_HINT
+                    )
+                });
+                (models, reason)
             }
-            // An ollama engine luu starts and nothing has started yet answers
-            // on no port — an automatic one has none at all — and what it
-            // would serve is ollama's store on this disk, by ollama's own
-            // names. Asking the port was a `connection refused` on every
-            // picker that showed the provider before a session had used it.
-            Err(_)
-                if resolved
-                    .engine
-                    .as_ref()
-                    .is_some_and(|(_, e)| e.kind == crate::provider::EngineKind::Ollama) =>
-            {
+            Err(error) => (Vec::new(), Some(error)),
+        },
+        _ => match &local_engine {
+            Some(engine) => {
                 let catalog = tokio::task::spawn_blocking(crate::models::catalog)
                     .await
                     .unwrap_or_default();
-                let models: Vec<String> = catalog
-                    .into_iter()
-                    .filter(|m| m.source == crate::models::Source::Ollama)
-                    .map(|m| {
-                        let mut badge = ollama_badge.clone();
-                        badge.extend(m.badge.iter().skip(2));
-                        badges.insert(m.name.clone(), badge);
-                        m.name
-                    })
-                    .collect();
-                let reason = models
-                    .is_empty()
-                    .then(|| "no model in ollama's store on this machine".to_string());
+                let mut models: Vec<String> = Vec::new();
+                if let Some(own) = &engine.model {
+                    models.push(own.clone());
+                    labels.insert(own.clone(), crate::models::label(own));
+                }
+                for model in catalog {
+                    match model.runs_on(engine.kind) {
+                        Ok(()) => {
+                            if !models.contains(&model.reference) {
+                                models.push(model.reference.clone());
+                            }
+                            badges.insert(model.reference.clone(), model.badge);
+                            labels.insert(model.reference, model.name);
+                        }
+                        Err(reason) => unavailable.push(Unavailable {
+                            model: model.reference,
+                            label: model.name,
+                            badge: model.badge,
+                            reason,
+                        }),
+                    }
+                }
+                let reason = models.is_empty().then(|| {
+                    format!(
+                        "no model this {} engine loads in ollama, llama.cpp, Hugging Face or luu's \
+                     own models directory",
+                        engine.kind.as_str()
+                    )
+                });
                 (models, reason)
             }
-            Err(error) => (Vec::new(), Some(error.to_string())),
+            None => match backend.models().await {
+                Ok(models) => {
+                    // Named by where they came from, the way the catalog is.
+                    if resolved.kind == crate::provider::BackendKind::Ollama {
+                        for model in &models {
+                            badges.insert(model.clone(), ollama_badge.clone());
+                        }
+                    }
+                    (models, None)
+                }
+                // An ollama engine luu starts and nothing has started yet answers
+                // on no port — an automatic one has none at all — and what it
+                // would serve is ollama's store on this disk, by ollama's own
+                // names. Asking the port was a `connection refused` on every
+                // picker that showed the provider before a session had used it.
+                Err(_)
+                    if resolved
+                        .engine
+                        .as_ref()
+                        .is_some_and(|(_, e)| e.kind == crate::provider::EngineKind::Ollama) =>
+                {
+                    let catalog = tokio::task::spawn_blocking(crate::models::catalog)
+                        .await
+                        .unwrap_or_default();
+                    let models: Vec<String> = catalog
+                        .into_iter()
+                        .filter(|m| m.source == crate::models::Source::Ollama)
+                        .map(|m| {
+                            let mut badge = ollama_badge.clone();
+                            badge.extend(m.badge.iter().skip(2));
+                            badges.insert(m.name.clone(), badge);
+                            m.name
+                        })
+                        .collect();
+                    let reason = models
+                        .is_empty()
+                        .then(|| "no model in ollama's store on this machine".to_string());
+                    (models, reason)
+                }
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            },
         },
     };
     let profile = config.profiles().get(name).cloned().unwrap_or_default();
@@ -11608,10 +11757,18 @@ async fn place_for(
 /// go (`RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4).
 /// A posture's file that does not load names nothing here; choosing it says
 /// why.
+///
+/// **And the one `serve` was started on**: `--worker-image`, or its own
+/// policy file's `[worker] image`. Whoever started the server named it, as
+/// surely as a table would — and the flag moves every place this server
+/// offers onto it, so leaving it out refused the offer the page had just been
+/// made. The Helm chart starts `serve` exactly so, and a cluster has no
+/// other image. See `RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`.
 async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRule>)> {
     let postures = app.postures();
     let environments = app.environments();
     let declared = declared_images().await;
+    let own = app.describe_for.clone();
     blocking(move || {
         let from_files = postures.values().filter_map(|posture| {
             agent_core::worker::WorkerConfig::from_file(&posture.policy).ok()
@@ -11629,6 +11786,24 @@ async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRu
             };
             if !named.iter().any(|(there, _)| *there == image) {
                 named.push((image, worker.paths));
+            }
+        }
+        if let Some(describe) = own {
+            let started = describe(None, None);
+            let contained = started
+                .runtime
+                .parse::<agent_core::worker::Runtime>()
+                .is_ok_and(|runtime| runtime.is_contained());
+            if let Some(image) = started.image.filter(|_| contained)
+                && !named.iter().any(|(there, _)| *there == image)
+            {
+                // Its in-image paths are its own file's, where it has one.
+                let paths = agent_core::worker::WorkerConfig::from_file(std::path::Path::new(
+                    &started.policy,
+                ))
+                .map(|worker| worker.paths)
+                .unwrap_or_default();
+                named.push((image, paths));
             }
         }
         named
@@ -12389,6 +12564,62 @@ async fn get_folders(
     }
 }
 
+/// `POST /api/folders`: `{ "path": "<parent>", "name": "<new>" }`.
+#[derive(serde::Deserialize)]
+struct NewFolder {
+    /// The folder it goes in, relative to the root as `/api/folders` lists
+    /// it; `""` for the root itself.
+    #[serde(default)]
+    path: String,
+    name: String,
+}
+
+/// `POST /api/folders`: a new, empty folder for the picker to choose — the
+/// project somebody is about to start, which has nowhere to be chosen from
+/// until it exists. Under the same root [`get_folders`] browses and nowhere
+/// else: a user's folder for a user, `serve`'s root otherwise. One level, one
+/// name, never over something that is there — see [`workspace::make_dir`].
+///
+/// Who may is who may rename a file (`workspace_writable`): a person at this
+/// machine, or a user in their own folder. It is not the session's sandbox
+/// that is asked — the picker chooses *which* folder a session gets, so it
+/// is above every session — but a sandbox that grants `read-write` on the
+/// root and nothing else, so a name that would land outside it is refused by
+/// the same `check_path` that refuses a tool call.
+async fn post_folders(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<NewFolder>,
+) -> Response {
+    if let Err(refused) = workspace_writable(&state, &headers, "making a folder") {
+        return *refused;
+    }
+    let root = match user_root(&state.app, &owner_key()) {
+        Ok(root) => root,
+        Err((status, message)) => return (status, message).into_response(),
+    };
+    let policy = agent_core::sandbox::SandboxPolicy {
+        paths: vec![agent_core::sandbox::PathRule::new(
+            ".",
+            agent_core::sandbox::Access::ReadWrite,
+        )],
+        ..Default::default()
+    };
+    let sandbox = match agent_core::sandbox::Sandbox::new(&policy, &root) {
+        Ok(sandbox) => sandbox,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    match workspace::make_dir(&sandbox, &asked.path, &asked.name).await {
+        Ok(path) => {
+            tracing::info!(target: "luu::workspace", path = path.as_str(), "a folder was made");
+            Json(serde_json::json!({ "path": path })).into_response()
+        }
+        Err(error) => workspace_error(error),
+    }
+}
+
 /// `PUT /api/session/folder`.
 #[derive(serde::Deserialize)]
 struct MoveFolder {
@@ -13035,19 +13266,52 @@ async fn resume_session(
     };
     // Already live — beside the current one, or asleep in nobody's way — is
     // attached to rather than resumed: it becomes the current one, as it is,
-    // with whatever it is running. A body naming another destination does not
-    // move it; *Continue here* on it does. See
+    // with whatever it is running. See
     // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
-    if let Some(live) = app.live(id) {
-        app.make_current(id, live.clone());
-        let mut summary = live.view.lock().await.summary();
-        summary.id = id.to_string();
-        return Json(summary).into_response();
-    }
-    if let Err(refused) = room_for_one(app).await {
-        return *refused;
-    }
-    let previous = app.current();
+    //
+    // **Unless the body names somewhere else for it to send.** That is the
+    // model picker's switch and the sessions dialog's *Continue here*, and
+    // both are only ever asked of a session that is live: attaching answered
+    // them `200` and moved nothing, so a page that picked another provider
+    // kept sending to the first one. A move is the resume below run on the
+    // session's own checkpoint — the history re-folded with the new
+    // destination's counter and tool transport, and the header saying where
+    // it changed — under the posture it already has and the agency already
+    // running it, between turns, with its lock held until the rebuilt one is
+    // live under the same id. See
+    // `RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md`.
+    let moving = match app.live(id) {
+        Some(live) if names_another_destination(&asked, &live).await => Some(live),
+        Some(live) => {
+            app.make_current(id, live.clone());
+            let mut summary = live.view.lock().await.summary();
+            summary.id = id.to_string();
+            return Json(summary).into_response();
+        }
+        None => None,
+    };
+    let _between_turns = match &moving {
+        Some(live) => {
+            let session = live.session.lock().await;
+            if session.current.is_some() || session.pending.is_some() || session.held.is_some() {
+                return (
+                    StatusCode::CONFLICT,
+                    "a turn is running or a proposal waits at its gate: a session moves to \
+                     another destination between turns",
+                )
+                    .into_response();
+            }
+            Some(session)
+        }
+        // Moving one takes no room: it is rebuilt in its own place.
+        None => {
+            if let Err(refused) = room_for_one(app).await {
+                return *refused;
+            }
+            None
+        }
+    };
+    let previous = moving.clone().unwrap_or_else(|| app.current());
 
     let Some(store_mutex) = &app.store else {
         return (StatusCode::NOT_IMPLEMENTED, "session store is disabled").into_response();
@@ -13122,6 +13386,12 @@ async fn resume_session(
         // A user's root is their folder, and never `serve`'s.
         .or_else(|| folder_under_root(app, None).ok().flatten());
     let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
+        // A live session moving keeps what runs it: nothing is built, and
+        // nothing that runs its tools is ended.
+        _ if moving.is_some() => Some(Ok((
+            previous.posture.lock().await.clone(),
+            previous.agency().await,
+        ))),
         (None, None, Some(stored)) => {
             posture_from_copy(
                 app,
@@ -13418,8 +13688,34 @@ async fn resume_session(
     };
     app.publish(&live, Event::Protocol(hello)).await;
     app.make_current(id, live.clone());
+    // The one it replaced is out of the map now: an engine only it sent to
+    // is nobody's, and is stopped as a session put to sleep would stop it.
+    if moving.is_some() {
+        release_engines(app, None).await;
+    }
 
     Json(summary).into_response()
+}
+
+/// Whether a resume of the live session `live` asks it to send somewhere
+/// else: a profile or a model named, and not the one it sends to now. A body
+/// naming where it already is — the history's click, a second click on the
+/// picker's row — is an attach, as it was.
+async fn names_another_destination(asked: &NewSession, live: &LiveSession) -> bool {
+    let named = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let (provider, model) = (named(&asked.provider), named(&asked.model));
+    if provider.is_none() && model.is_none() {
+        return false;
+    }
+    let sending = live.destination().await;
+    provider.is_some_and(|provider| sending.settings.profile.as_deref() != Some(provider.as_str()))
+        || model.is_some_and(|model| model != sending.model)
 }
 
 /// What a page may change about a stored session short of deleting it: its
@@ -14024,6 +14320,53 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The image `serve` was started on — `--worker-image`, as the chart
+    /// starts it — is one this machine names: the flag moves every place the
+    /// page is offered onto it, so a session asked there is made, and an
+    /// image nobody named is still refused. A server whose own worker runs on
+    /// the host names none by it.
+    #[tokio::test]
+    async fn the_image_serve_was_started_on_is_one_this_machine_names() {
+        const STARTED: &str = "ghcr.io/jgermade/luu-worker:0.1.13";
+        let describing = |runtime: &'static str, image: Option<&'static str>| -> DescribeFactory {
+            Arc::new(move |_, _| Where {
+                policy: "no-such-policy.toml".into(),
+                runtime: runtime.into(),
+                image: image.map(str::to_string),
+                missing: None,
+                gap: None,
+            })
+        };
+
+        let mut started = app(&["ok"]);
+        Arc::get_mut(&mut started).unwrap().describe_for =
+            Some(describing("docker", Some(STARTED)));
+        assert!(
+            images_named(&started)
+                .await
+                .iter()
+                .any(|(image, _)| image == STARTED)
+        );
+        let place = place_for(&started, Some("docker"), Some(STARTED))
+            .await
+            .unwrap();
+        assert_eq!(place.image.as_deref(), Some(STARTED));
+        assert!(
+            place_for(&started, Some("docker"), Some("nobody-named/this:1"))
+                .await
+                .is_err()
+        );
+
+        let mut on_host = app(&["ok"]);
+        Arc::get_mut(&mut on_host).unwrap().describe_for = Some(describing("host", Some(STARTED)));
+        assert!(
+            !images_named(&on_host)
+                .await
+                .iter()
+                .any(|(image, _)| image == STARTED)
+        );
     }
 
     /// The case that wrote nothing, which is the one that mattered.

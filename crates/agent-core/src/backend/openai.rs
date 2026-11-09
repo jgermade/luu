@@ -19,15 +19,31 @@
 //! on every call and is already compared against our own count per turn. Which
 //! is why [`stream_options`] is not optional here — see [`Body`].
 //!
+//! **Reasoning that arrives in a field of its own** — `reasoning_content`
+//! (DeepSeek, Alibaba Cloud's compatible mode, vLLM) or `reasoning`
+//! (OpenRouter, llama-server with `--reasoning-format`) — streams up as
+//! `<think>…</think>`, as the Anthropic backend's thinking blocks do, so it is
+//! shown and folded like every other model's. And **a reply's thinking goes
+//! back only to the destination that wrote it**: every earlier answer this
+//! backend did not stream itself — another provider's, before a switch — goes
+//! up with its `<think>` cut out. See [`Written`] and
+//! `RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md`.
+//!
 //! See `RECORD/2026-09-01.an-openai-compatible-backend.completed.md`.
+
+use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
 
 use futures_util::StreamExt;
 use serde::Deserialize;
 
 use super::{
     Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Constraint,
-    StopReason, Usage,
+    Message, Role, StopReason, Usage, without_thinking,
 };
+use crate::tools::thinking_spans;
 
 /// `llama-server`'s default. Not a claim that it is the likeliest server, just
 /// the one this repository's own recipe would reach for first.
@@ -41,6 +57,90 @@ pub struct OpenAi {
     name: String,
     api_key: Option<String>,
     http: reqwest::Client,
+    /// The replies with thinking this backend streamed, so they go back with
+    /// it and nothing else's does.
+    written: Written,
+}
+
+/// How many replies [`Written`] remembers: a key apiece, so a long session's
+/// worth rather than the Anthropic backend's handful of block lists.
+const REMEMBERED: usize = 4096;
+
+/// The replies with thinking in them that this backend wrote, by a hash of
+/// the model and of the text it streamed up — which is the text the loop puts
+/// in the history, so the same message comes back with the same key.
+///
+/// A reply found here goes back as it came, `<think>` and all: a model that
+/// thinks between tool calls is shown its own reasoning, which is what
+/// interleaved thinking needs. Any other reply with thinking in it — another
+/// provider's before a switch, or one luu edited since — goes back without it.
+/// A backend is built per destination, so a switch starts with nothing
+/// remembered, as the Anthropic backend's `Replies` does.
+#[derive(Default)]
+struct Written {
+    keys: Mutex<VecDeque<u64>>,
+}
+
+impl Written {
+    fn key(model: &str, text: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        model.hash(&mut hasher);
+        text.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn keep(&self, model: &str, text: &str) {
+        let key = Self::key(model, text);
+        let mut keys = self
+            .keys
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        keys.retain(|k| *k != key);
+        keys.push_back(key);
+        while keys.len() > REMEMBERED {
+            keys.pop_front();
+        }
+    }
+
+    fn wrote(&self, model: &str, text: &str) -> bool {
+        let key = Self::key(model, text);
+        self.keys
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .contains(&key)
+    }
+}
+
+/// The history as this destination is sent it: an earlier answer with
+/// thinking it did not write goes up without the thinking. One left with
+/// nothing — all thinking, cut off before it answered — is dropped, and the
+/// two user messages either side of it become one, so the roles still take
+/// turns for a template that refuses otherwise.
+fn sendable(history: &[Message], wrote: impl Fn(&str) -> bool) -> Vec<Message> {
+    let mut out: Vec<Message> = Vec::with_capacity(history.len());
+    let mut dropped = false;
+    for message in history {
+        if message.role == Role::Assistant
+            && !thinking_spans(&message.content).is_empty()
+            && !wrote(&message.content)
+        {
+            let text = without_thinking(&message.content);
+            dropped = text.is_empty();
+            if !dropped {
+                out.push(Message::assistant(text));
+            }
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if dropped && message.role == Role::User && last.role == Role::User => {
+                last.content.push_str("\n\n");
+                last.content.push_str(&message.content);
+            }
+            _ => out.push(message.clone()),
+        }
+        dropped = false;
+    }
+    out
 }
 
 impl OpenAi {
@@ -52,6 +152,7 @@ impl OpenAi {
             name,
             api_key: None,
             http: reqwest::Client::new(),
+            written: Written::default(),
         }
     }
 
@@ -188,6 +289,13 @@ struct Choice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    /// A thinking model's reasoning, apart from its answer: DeepSeek's name
+    /// for it, which Alibaba Cloud's compatible mode and vLLM kept.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    /// The same, by OpenRouter's and llama-server's name.
+    #[serde(default)]
+    reasoning: Option<String>,
     /// A call the server parsed out of the model's reply, in pieces: the
     /// first delta for an `index` names it, the ones after carry fragments of
     /// its arguments' JSON string.
@@ -235,6 +343,8 @@ struct ApiError {
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
     Text(String),
+    /// Reasoning, and the answer's first text where one event carried both.
+    Reasoning(String, Option<String>),
     /// Pieces of calls: `(index, name, arguments fragment)`.
     Calls(Vec<(usize, Option<String>, Option<String>)>),
     Stop(StopReason),
@@ -286,10 +396,20 @@ fn parse_event(payload: &[u8]) -> Result<Parsed, BackendError> {
                 _ => StopReason::Other,
             }));
         }
-        if let Some(text) = &choice.delta.content
-            && !text.is_empty()
+        fn said(text: &Option<String>) -> Option<&str> {
+            text.as_deref().filter(|t| !t.is_empty())
+        }
+        let text = said(&choice.delta.content);
+        if let Some(thinking) =
+            said(&choice.delta.reasoning_content).or_else(|| said(&choice.delta.reasoning))
         {
-            return Ok(Parsed::Text(text.clone()));
+            return Ok(Parsed::Reasoning(
+                thinking.to_string(),
+                text.map(str::to_string),
+            ));
+        }
+        if let Some(text) = text {
+            return Ok(Parsed::Text(text.to_string()));
         }
     }
 
@@ -512,6 +632,9 @@ impl Backend for OpenAi {
         let url = format!("{}/chat/completions", self.base_url);
         let http = self.http.clone();
         let api_key = self.api_key.clone();
+        let history = sendable(&request.messages, |text| {
+            self.written.wrote(&request.model, text)
+        });
 
         Box::pin(async_stream::try_stream! {
             let (response_format, grammar) = match &request.constraint {
@@ -531,10 +654,10 @@ impl Backend for OpenAi {
             let native = !request.tools.is_empty();
             let messages = match native {
                 true => serde_json::to_value(super::native::messages(
-                    &request.messages,
+                    &history,
                     super::native::Arguments::String,
                 )),
-                false => serde_json::to_value(&request.messages),
+                false => serde_json::to_value(&history),
             }
             .map_err(|e| BackendError::Malformed(e.to_string()))?;
             let mut post = http.post(&url).json(&Body {
@@ -576,6 +699,11 @@ impl Backend for OpenAi {
             // as text once the reply is over — see `super::native`.
             let mut calls = super::native::Calls::default();
             let mut texted = false;
+            // `<think>` went up and its `</think>` has not.
+            let mut thinking = false;
+            // Everything that went up: the text the loop keeps, and so the
+            // text this reply is remembered under.
+            let mut said = String::new();
 
             while let Some(bytes) = body.next().await {
                 let bytes = bytes.map_err(|e| BackendError::transport(&e))?;
@@ -599,8 +727,30 @@ impl Backend for OpenAi {
                     }
                     match parse_event(payload)? {
                         Parsed::Text(text) => {
+                            let mut up = String::new();
+                            if std::mem::take(&mut thinking) {
+                                up.push_str("</think>\n\n");
+                            }
+                            up.push_str(&text);
                             texted = true;
-                            yield Chunk::Text(text)
+                            said.push_str(&up);
+                            yield Chunk::Text(up)
+                        }
+                        Parsed::Reasoning(reasoning, then) => {
+                            let mut up = String::new();
+                            if !thinking {
+                                up.push_str("<think>");
+                                thinking = true;
+                            }
+                            up.push_str(&reasoning);
+                            if let Some(text) = then {
+                                up.push_str("</think>\n\n");
+                                up.push_str(&text);
+                                thinking = false;
+                            }
+                            texted = true;
+                            said.push_str(&up);
+                            yield Chunk::Text(up)
                         }
                         Parsed::Calls(pieces) => {
                             for (index, name, arguments) in pieces {
@@ -627,9 +777,20 @@ impl Backend for OpenAi {
                     return;
                 }
             };
+            // Reasoning and nothing after it: a reply cut off while it
+            // thought, or one whose answer is a call the server parsed.
+            if thinking {
+                said.push_str("</think>");
+                yield Chunk::Text("</think>".to_string());
+            }
             for call in calls.finish() {
-                yield Chunk::Text(super::native::fence(&call, texted));
+                let fence = super::native::fence(&call, texted);
+                said.push_str(&fence);
+                yield Chunk::Text(fence);
                 texted = true;
+            }
+            if !thinking_spans(&said).is_empty() {
+                self.written.keep(&request.model, &said);
             }
             yield Chunk::Done { stop, usage };
         })
@@ -649,6 +810,68 @@ mod tests {
         // The first event of every stream: a role and no content.
         let role = br#"{"choices":[{"delta":{"role":"assistant"}}]}"#;
         assert_eq!(parse_event(role).unwrap(), Parsed::Nothing);
+    }
+
+    /// Reasoning in a field of its own, by either name; the empty ones of a
+    /// role event are nothing; one event with both keeps both, in order.
+    #[test]
+    fn reasoning_in_its_own_field_is_reasoning_by_either_name() {
+        let deepseek = br#"{"choices":[{"delta":{"content":null,"reasoning_content":"hm"}}]}"#;
+        assert_eq!(
+            parse_event(deepseek).unwrap(),
+            Parsed::Reasoning("hm".into(), None)
+        );
+        let openrouter = br#"{"choices":[{"delta":{"reasoning":"hm"}}]}"#;
+        assert_eq!(
+            parse_event(openrouter).unwrap(),
+            Parsed::Reasoning("hm".into(), None)
+        );
+        let role =
+            br#"{"choices":[{"delta":{"role":"assistant","content":"","reasoning_content":""}}]}"#;
+        assert_eq!(parse_event(role).unwrap(), Parsed::Nothing);
+        let both = br#"{"choices":[{"delta":{"content":"Hola","reasoning_content":"ok"}}]}"#;
+        assert_eq!(
+            parse_event(both).unwrap(),
+            Parsed::Reasoning("ok".into(), Some("Hola".into()))
+        );
+    }
+
+    /// What goes up: an answer with thinking this destination did not write
+    /// without it, its own as it came, one with no thinking untouched — and
+    /// one that was all thinking dropped, the two prompts around it one.
+    #[test]
+    fn only_the_thinking_this_destination_wrote_goes_back() {
+        let ours = "<think>mine</think>\n\nYes.";
+        let history = [
+            Message::system("sys"),
+            Message::user("a"),
+            Message::assistant("<think>theirs</think>\n\nNo."),
+            Message::user("b"),
+            Message::assistant(ours),
+            Message::user("c"),
+            Message::assistant("plain"),
+            Message::user("d"),
+            Message::assistant("<think>cut off"),
+            Message::user("e"),
+        ];
+        let sent = sendable(&history, |text| text == ours);
+        let shown: Vec<(Role, &str)> = sent.iter().map(|m| (m.role, m.content.as_str())).collect();
+        assert_eq!(
+            shown,
+            [
+                (Role::System, "sys"),
+                (Role::User, "a"),
+                (Role::Assistant, "No."),
+                (Role::User, "b"),
+                (Role::Assistant, ours),
+                (Role::User, "c"),
+                (Role::Assistant, "plain"),
+                (Role::User, "d\n\ne"),
+            ]
+        );
+        // A template's own `<think>`, opened before the reply: the close alone.
+        let opened = [Message::assistant("weighing it</think>\n\nDone.")];
+        assert_eq!(sendable(&opened, |_| false)[0].content, "Done.");
     }
 
     #[test]

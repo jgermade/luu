@@ -174,7 +174,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # page says the tree's own shapes are a fallback and names that key.
 #
 # Engines are model servers luu starts: `[engine.<name>]` in config.toml
-# (llama-server, mlx-serve or ollama; a binary found here, a path, or luu's own
+# (llama-server, mlx-serve, ollama or strata; a binary found here, a path, or luu's own
 # copy of an official release, checked against GitHub's sha256), started when a session on
 # a profile with `engine = "<name>"` needs it and stopped with `serve`:
 #

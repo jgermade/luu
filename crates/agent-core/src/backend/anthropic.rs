@@ -31,9 +31,9 @@ use serde_json::{Value, json};
 
 use super::{
     Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Constraint,
-    Message, ModelFacts, Role, StopReason, ToolSpec, Usage, WindowIs,
+    Message, ModelFacts, Role, StopReason, ToolSpec, Usage, WindowIs, without_thinking,
 };
-use crate::tools::{ToolCall, split_call, thinking_spans};
+use crate::tools::{ToolCall, split_call};
 
 /// `llama-server`'s address, as the OpenAI backend's default is: a machine
 /// this repository's own recipe starts, and not a host somebody else runs.
@@ -364,19 +364,6 @@ impl Prefix {
         text.hash(&mut hasher);
         hasher.finish()
     }
-}
-
-/// `text` without its reasoning, for a reply that goes back as text: a model
-/// shown its own `<think>` as something it said learns to say it.
-fn without_thinking(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    for span in thinking_spans(text) {
-        out.push_str(&text[at..span.start]);
-        at = span.end;
-    }
-    out.push_str(&text[at..]);
-    out.trim().to_string()
 }
 
 fn text_block(text: &str) -> Value {

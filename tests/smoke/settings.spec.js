@@ -1378,6 +1378,91 @@ test("a new default and the chat's picker both move the session without a restar
 })
 
 /**
+ * The picker on a session **with turns** moves it, history and all: the same
+ * session, re-folded on the other provider, and back again. Until 2026-11-08
+ * a resume of the session already live attached to it and answered `200`
+ * without moving anything, so the button kept naming the first provider. See
+ * `RECORD/2026-11-08.a-live-session-moves-when-asked.completed.md`.
+ */
+test("the chat's picker moves a session that has turns, and the history comes along", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  // Where the test before left the session, to leave it there again: the
+  // tests after this one start from an empty session on that provider.
+  const left = await (await fetch(`${BASE}/api/settings`)).json()
+
+  // A session on the mock, and one turn in it, over the protocol socket.
+  const made = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "here" }),
+  })
+  expect(made.status).toBe(201)
+  const { id } = await made.json()
+  await new Promise((done, failed) => {
+    const ws = new WebSocket(`${BASE.replace("http", "ws")}/ws`)
+    const timer = setTimeout(() => { ws.close(); failed(new Error("the turn never ended")) }, 15_000)
+    ws.onopen = () => ws.send(JSON.stringify({ type: "prompt", text: "una pregunta antes de cambiar" }))
+    ws.onmessage = ({ data }) => {
+      const message = JSON.parse(data)
+      if (message.type === "plan_proposed") ws.send(JSON.stringify({ type: "decline_plan" }))
+      if (message.type === "ended" || message.type === "failed" || message.type === "refused") {
+        clearTimeout(timer)
+        ws.close()
+        done(message)
+      }
+    }
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await expect(page.locator(".options .dest")).toContainText("here")
+  await expect(page.getByText("una pregunta antes de cambiar", { exact: true })).toBeVisible()
+
+  await page.click(".options .dest")
+  const menu = page.locator(".options .menu")
+  await expect(menu.locator("footer")).toContainText("The history comes along")
+  await menu.locator(".prov", { hasText: "local" }).hover()
+  await menu.locator(".models button.model", { hasText: "tiny" }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(page.locator(".options .dest")).toContainText("local")
+  await expect(page.locator(".options .dest")).toContainText("tiny")
+  // The same session, its turn still on screen.
+  await expect(page.getByText("una pregunta antes de cambiar", { exact: true })).toBeVisible()
+  const moved = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(moved.profile).toBe("local")
+  // Listed as the one on screen, still one turn long: not a new session.
+  const listed = await (await fetch(`${BASE}/api/sessions`)).json()
+  const current = listed.filter(row => row.live?.current)
+  expect(current.map(row => [row.model.startsWith("tiny"), row.turns])).toEqual([[true, 1]])
+
+  // Back, by the API the dialog's *Continue here* uses; and a body naming
+  // where it already is attaches, as it always did.
+  const resume = body => fetch(`${BASE}/api/sessions/${id}/resume`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  expect((await resume({ provider: "here" })).status).toBe(200)
+  await expect(page.locator(".options .dest")).toContainText("here")
+  expect((await (await fetch(`${BASE}/api/settings`)).json()).profile).toBe("here")
+  expect((await resume({ provider: "here" })).status).toBe(200)
+  expect(errors).toEqual([])
+
+  const fresh = await fetch(`${BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: left.profile, model: left.model }),
+  })
+  expect(fresh.status).toBe(201)
+})
+
+/**
  * The models already on the machine, named by where they came from, in the
  * engine form and in the chat's picker for a provider whose engine luu
  * starts. The stores are the suite's own fixtures — see `beforeAll`.
@@ -1398,7 +1483,9 @@ test("the models on this machine are listed by where they came from", async ({ p
   expect(catalog.models.find(m => m.label === "tiny:1b (ollama)").reference).toBe("ollama:tiny:1b")
   // And which engine cannot load which, in the server's words.
   const big = catalog.models.find(m => m.label.startsWith("big:27b-mlx"))
-  expect(Object.keys(big.cannot).sort()).toEqual(["llama", "mlx"])
+  expect(Object.keys(big.cannot).sort()).toEqual(["llama", "mlx", "strata"])
+  // Strata loads none of them: its models are the run configs it installed.
+  expect(catalog.models.every(m => m.cannot.strata)).toBe(true)
 
   // An ollama engine nothing has started lists ollama's store on this disk,
   // by ollama's own names — not `connection refused` from a port it is not on.
@@ -2212,6 +2299,86 @@ test("an engine's sheet moves it off a busy port, talks to it, and makes a sessi
     await expect(page.locator('.modal .rail button[aria-current="page"]')).toContainText("Engines")
   } finally {
     squatter.close()
+  }
+  expect(errors).toEqual([])
+})
+
+/**
+ * A Strata engine: its models are what Strata installed, asked of it
+ * (`strata models list`), never the catalog's files — the one missing a file
+ * beside them, out of the sheet. Started, it is `strata serve --profile` on
+ * that model's run config, in the foreground; stopped, a SIGTERM. Against a
+ * stand-in `strata`, since the suite downloads nothing. See
+ * `RECORD/2026-11-08.strata-as-an-engine.WIP.md`.
+ */
+test("a Strata engine lists what Strata installed and starts on one", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+
+  const bin = join(home, "strata-bin")
+  mkdirSync(bin, { recursive: true })
+  const config = join(bin, "strata-qwen-flash.json")
+  writeFileSync(config, "{}")
+  writeFileSync(join(bin, "models.json"), JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    models: [
+      { id: "qwen-flash", name: "Qwen3.8-Flash-Next", source_config: config, context_tokens: 65536, component_status: "present" },
+      { id: "ds-big", name: "DeepSeekV4.1-Flash", source_config: join(bin, "strata-ds-big.json"), component_status: "missing_or_invalid" },
+    ],
+  }))
+  writeFileSync(join(bin, "serve.py"), [
+    "import http.server, signal, sys",
+    "args = sys.argv[1:]",
+    "port = int(args[args.index('--port') + 1])",
+    "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))",
+    "print('stand-in strata on', port, flush=True)",
+    "class H(http.server.BaseHTTPRequestHandler):",
+    "    def do_GET(self):",
+    "        self.send_response(200 if self.path == '/health' else 404)",
+    "        self.send_header('content-length', '0')",
+    "        self.end_headers()",
+    "    def log_message(self, *_):",
+    "        pass",
+    "http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()",
+    "",
+  ].join("\n"))
+  const strata = join(bin, "strata")
+  writeFileSync(strata, '#!/bin/sh\nhere=$(dirname "$0")\ncase "$1" in\n  models) cat "$here/models.json" ;;\n' +
+    '  serve) exec python3 "$here/serve.py" "$@" ;;\n  *) exit 2 ;;\nesac\n')
+  chmodSync(strata, 0o755)
+
+  const file = join(home, "config.toml")
+  const before = readFileSync(file, "utf8")
+  writeFileSync(file, `${before.trimEnd()}\n\n[engine.strata-x]\nkind = "strata"\nbinary = "${strata}"\nport = 8099\n\n` +
+    `[provider.strata-x]\nbackend = "openai"\nengine = "strata-x"\nmodel = "qwen-flash"\n`)
+  try {
+    // The provider's models, as the chat's picker reads them.
+    const listed = await (await fetch(`${BASE}/api/providers/strata-x/models`)).json()
+    expect(listed.models).toEqual(["qwen-flash"])
+    expect(listed.labels["qwen-flash"]).toBe("Qwen3.8-Flash-Next")
+    expect(listed.unavailable.map(u => u.model)).toEqual(["ds-big"])
+
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${BASE}/index.html`)
+    await chooseFolder(page)
+    await page.click('.inspector .col-foot button[title="Settings"]')
+    await page.click('.modal .rail button:has-text("Engines")')
+    const card = page.locator(".engines-pane section.engine", { hasText: "strata-x" })
+    await expect(card).toContainText("luu adds serve --profile")
+    await card.getByRole("button", { name: "Start" }).click()
+    const sheet = page.getByRole("dialog", { name: "strata-x", exact: true })
+    await expect(sheet.locator(".model .label")).toHaveText(["Qwen3.8-Flash-Next"])
+    await expect(sheet.locator(".model")).toContainText("64K")
+    await sheet.getByRole("button", { name: "Start engine" }).click()
+    await expect(sheet.locator("pre.log")).toContainText("stand-in strata on 8099", { timeout: 10_000 })
+    await expect(sheet.locator(".line.cmd").first()).toContainText(`serve --profile ${config}`)
+    await sheet.getByRole("button", { name: "Close" }).click()
+    await card.getByRole("button", { name: "Stop" }).click()
+    await expect(card.locator(".state")).toHaveText("exited")
+    await page.locator(".modal-head button.close", { hasText: "close" }).click()
+  } finally {
+    writeFileSync(file, before)
   }
   expect(errors).toEqual([])
 })

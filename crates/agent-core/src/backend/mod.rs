@@ -197,6 +197,23 @@ pub type ChunkStream<'a> = Pin<Box<dyn Stream<Item = Result<Chunk, BackendError>
 
 /// Object-safe on purpose: the turn loop holds a `dyn Backend`, so swapping
 /// Ollama for an FFI binding never reaches the loop.
+/// `text` without its reasoning, for a reply that goes back as text: a model
+/// shown its own `<think>` as something it said learns to say it, and a model
+/// shown *another* model's learns to say that. The Anthropic backend cuts it
+/// from every reply it does not send back as the blocks it came as, and the
+/// OpenAI one from every reply this destination did not write — see
+/// `RECORD/2026-11-09.thinking-on-an-openai-compatible-server.completed.md`.
+pub(crate) fn without_thinking(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for span in crate::tools::thinking_spans(text) {
+        out.push_str(&text[at..span.start]);
+        at = span.end;
+    }
+    out.push_str(&text[at..]);
+    out.trim().to_string()
+}
+
 /// How long a model listing may take. Not the generation timeout: nothing is
 /// being generated, and the caller is a page waiting on a request.
 pub const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);

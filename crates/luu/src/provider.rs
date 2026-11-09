@@ -364,6 +364,8 @@ pub struct Engine {
     /// `huggingface:<org>/<repo>/<file>.gguf` — which luu turns into `-m
     /// <path>`. A session that picks another moves the engine onto it. See
     /// `crate::models`. Unused by ollama, which serves every model it has.
+    /// A Strata engine's is the id of a model Strata installed (`strata
+    /// models list`), or the path of its `strata-<model>.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Passed after the ones luu adds (`--host`, `--port`): the model, the
@@ -410,6 +412,12 @@ pub enum EngineKind {
     /// Apple Silicon. Chosen over `mlx_lm.server` by measurement — see the
     /// engines record.
     Mlx,
+    /// Strata's `strata serve`, spoken to as `openai`: large mixture-of-experts
+    /// models on one consumer GPU, its experts split between the card, RAM
+    /// and disk. Its models are its own — the run configs `strata launch`
+    /// installed, named by their id — and never a file from the catalog. See
+    /// `RECORD/2026-11-08.strata-as-an-engine.WIP.md`.
+    Strata,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

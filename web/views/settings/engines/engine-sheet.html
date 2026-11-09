@@ -11,7 +11,7 @@
   // chat there would talk to that server, whatever it holds. Start offers the
   // first free port instead, which moves the engine and its providers.
   const [
-    { startEngine, loadCatalog, freePort, moveEngine, defaultPort, chatEngine },
+    { startEngine, loadCatalog, loadEngineModels, freePort, moveEngine, defaultPort, chatEngine },
     { state, newSession, closeSettings },
     { checkModel },
     { brandSrc, modelBrand },
@@ -53,8 +53,15 @@
   let loading = true
   let busy = false
   let error = ""
-  loadCatalog().then(listed => {
+  // Why there is nothing to start on, where the server said: Strata's own
+  // answer, which names the command that installs a model.
+  let none = ""
+  // A Strata engine's models are what Strata installed, asked of it; every
+  // other kind's, the catalog's files.
+  const listing = kind === "strata" ? loadEngineModels(name) : loadCatalog()
+  listing.then(listed => {
     catalog = listed.ok ? listed.view.models : []
+    none = listed.ok ? listed.view.reason || "" : listed.error
     loading = false
     const loads = catalog.filter(m => !m.cannot?.[kind])
     if (!loads.some(m => m.reference === chosen)) chosen = loads[0]?.reference || ""
@@ -179,7 +186,8 @@
       <p :if="!loading && !loadable.length" class="dim small">
         No model this engine can load is on this machine.
         <span :if="kind === 'ollama'"><code>ollama pull</code> one first.</span>
-        <span :if="kind !== 'ollama'">A GGUF in ollama's store, llama.cpp's cache, Hugging Face's or
+        <span :if="kind === 'strata'">{{ none || "Strata lists the models it installed." }}</span>
+        <span :if="kind !== 'ollama' && kind !== 'strata'">A GGUF in ollama's store, llama.cpp's cache, Hugging Face's or
           <code>luu:/models</code> is listed here.</span>
       </p>
       <label :each="m in loadable" :key="m.reference" class="model" :class.on="chosen === m.reference">
@@ -187,7 +195,8 @@
         <BrandIcon :src="brandSrc(modelBrand(m.reference))" />
         <span class="label" :title="m.label">{{ m.name }}</span>
         <OriginBadge :parts="m.badge || []" />
-        <span class="dim small">{{ gb(m.size) }}</span>
+        <span :if="m.size" class="dim small">{{ gb(m.size) }}</span>
+        <span :if="!m.size && m.context_tokens" class="dim small">{{ Math.round(m.context_tokens / 1024) }}K</span>
       </label>
     </div>
     <div :if="providers.length > 1" class="provider">
