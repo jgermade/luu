@@ -25,18 +25,16 @@
     { currentHost, loadHosts, askHost, tellHost, goToHost },
     { openSettingsAt },
     Modal,
-    HostForm,
     TextInput,
   ] = await C79.importAll([
     "@web/lib/workspace.js",
     "@web/lib/hosts.js",
     "@web/lib/ui.js",
     "@web/components/modal.html",
-    "@web/views/inspector/tree/host-form.html",
     "@web/theme/default/components/text-input.html",
   ])
 
-  // `[host.*]`, as this server answers it. A static copy of the page has no
+  // The luus linked by key, as this server answers them. A static copy of the page has no
   // `/api/hosts`, and then there is this machine alone.
   let hostsView = { hosts: {}, editable: false }
   // name → { state: "asking" | "ok" | "down", base, error }
@@ -46,8 +44,6 @@
   // name|path → the directories in it, or { error }.
   let listings = {}
   let at = workspace.picker.at || workspace.folder || ""
-  // `null` closed, `{}` adding, `{ name }` editing.
-  let editingHost = null
   const label = name => name || "localhost"
 
   $: names = ["", ...Object.keys(hostsView.hosts || {})]
@@ -203,7 +199,7 @@
       </p>
 
       <div class="project">
-        <!-- Hosts: this machine, and every `[host.*]`. -->
+        <!-- Hosts: this machine, and every luu linked to it by key. -->
         <section class="col hosts" aria-label="Host">
           <h3>Host</h3>
           <ul class="list" role="listbox">
@@ -220,13 +216,11 @@
                 </span>
                 <span :if="name === currentHost" class="here small">here</span>
               </button>
-              <button :if="name && hostsView.editable && !hostsView.hosts[name]?.linked" type="button" class="edit" title="Edit this host"
-                      @click="editingHost = { name }"><svg class="ic"><use href="#i-edit"/></svg></button>
             </li>
           </ul>
-          <!-- Another luu is linked by key in Remote access, since row 68: a
-               `[host.*]` and its token are kept and edited, no longer added.
-               See RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md. -->
+          <!-- Another luu is linked by key in Remote access. `[host.*]` and its
+               token were removed on 2026-11-09: see
+               RECORD/2026-11-09.five-decisions.WIP.md §72(c). -->
           <button :if="hostsView.editable" type="button" class="add" @click="closePicker(), openSettingsAt('remote')">
             <svg class="ic"><use href="#i-plus"/></svg> Link a luu
           </button>
@@ -293,9 +287,7 @@
 
     <!-- Inside the modal's body, so it opens as its child: a sheet out of
          this head, over this body only — as an engine's form over Settings. -->
-    <HostForm :if="editingHost" :view="hostsView" :editing="editingHost?.name || ''"
-              :saved="next => { hostsView = next; reach = {}; reloadHosts() }"
-              :close="() => { editingHost = null }" />
+
   </section>
 </Modal>
 

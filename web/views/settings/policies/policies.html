@@ -14,7 +14,7 @@
   // is not there. A list an environment names cannot be deleted — the button
   // says which. What was saved is what the next session runs under; the live
   // one keeps what it was built with.
-  const [{ loadPolicies, savePolicies }, TextInput, Select, Button, SaveButton] = await C79.importAll([
+  const [{ loadPolicies, savePolicies, loadProjectGrants, removeProjectGrant }, TextInput, Select, Button, SaveButton] = await C79.importAll([
     "@web/lib/policies.js",
     "@web/theme/default/components/text-input.html",
     "@web/theme/default/components/select.html",
@@ -54,6 +54,29 @@
     view = result.view
     draft = copy(view)
   })
+
+  // What a person allowed *always in this project*, answering a held call:
+  // read here, taken back here, never added here — a yes is how one is made.
+  // Row 52.
+  let projects = null
+  let projectsError = ""
+  loadProjectGrants().then(result => {
+    if (result.ok) projects = result.view
+    else projectsError = result.error
+  })
+  $: projectFolders = Object.keys(projects?.projects || {}).sort()
+  const projectItems = folder => {
+    const grants = projects?.projects?.[folder] || {}
+    return [
+      ...(grants.commands || []).map(target => ({ kind: "command", target, word: "run" })),
+      ...(grants.writes || []).map(target => ({ kind: "write", target, word: "write" })),
+    ]
+  }
+  const takeBack = async (folder, item) => {
+    const result = await removeProjectGrant(folder, item.kind, item.target)
+    if (result.ok) { projects = result.view; projectsError = "" }
+    else projectsError = result.error
+  }
 
   $: editable = !!view?.editable
   // How many lists and environments the draft moves away from the file.
@@ -217,6 +240,28 @@
         </div>
       </article>
     </div>
+  </section>
+
+  <section :if="projects" class="pane-group always" data-kind="project">
+    <div class="kind-head">
+      <h3>Always, by project</h3>
+      <span class="dim small">What you allowed with <b>Always in this project</b>: it runs without asking in every session in that folder, until it is taken back here. Never in the project's own files.</span>
+    </div>
+    <p :if="!projectFolders.length" class="dim small">Nothing yet.</p>
+    <article :each="folder in projectFolders" :key="folder" class="list" :data-folder="folder">
+      <header><code class="name">{{ folder }}</code></header>
+      <div class="zone">
+        <span class="zone-name allow">allow</span>
+        <span class="entries">
+          <span :each="item in projectItems(folder)" :key="item.kind + ':' + item.target" class="entry">
+            <span class="dim">{{ item.word }}</span> <code>{{ item.target }}</code><button :if="projects.editable" type="button" class="drop"
+              :aria-label="`Take back ${item.word} ${item.target} in ${folder}`"
+              @click="takeBack(folder, item)">×</button>
+          </span>
+        </span>
+      </div>
+    </article>
+    <p :if="projectsError" class="error small">{{ projectsError }}</p>
   </section>
 
   <div :if="draft &amp;&amp; editable" class="section-actions">

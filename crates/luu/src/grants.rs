@@ -28,7 +28,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use agent_core::agent::{Ceiling, Escalation};
-use agent_core::protocol::{Grant, GrantKind};
+use agent_core::protocol::{Grant, GrantKind, GrantScope};
 use agent_core::sandbox::{Authority, Enforcement, Sandbox};
 use agent_core::tools::{ToolCall, writes_one_path};
 
@@ -91,6 +91,9 @@ pub struct DraftCeiling {
     /// asked to be written.
     denied_paths: Vec<String>,
     answers: Answered,
+    /// What was allowed always in this project — `[project."<folder>"]` — as
+    /// read when the turn began.
+    project: BTreeSet<Grant>,
 }
 
 impl DraftCeiling {
@@ -121,7 +124,15 @@ impl DraftCeiling {
                 .map(|environment| environment.files().deny.clone())
                 .unwrap_or_default(),
             answers,
+            project: BTreeSet::new(),
         }
+    }
+
+    /// With what this project allows always. Asked after the session's own
+    /// answers, so a no for the session still refuses what the project allows.
+    pub fn with_project(mut self, project: BTreeSet<Grant>) -> Self {
+        self.project = project;
+        self
     }
 }
 
@@ -191,7 +202,9 @@ impl Ceiling for DraftCeiling {
         if answers.forbidden.contains(&grant) {
             Escalation::Forbidden
         } else if answers.allowed.contains(&grant) {
-            Escalation::Granted(wider)
+            Escalation::Granted(wider, GrantScope::Session)
+        } else if self.project.contains(&grant) {
+            Escalation::Granted(wider, GrantScope::Project)
         } else {
             Escalation::Ask(wider)
         }
@@ -406,7 +419,7 @@ mod tests {
         answers.lock().unwrap().give(git.clone(), true);
         assert!(matches!(
             ceiling.escalate(&run("git"), &floor),
-            Escalation::Granted(_)
+            Escalation::Granted(_, GrantScope::Session)
         ));
 
         // A no for the session replaces the yes, and is refused unasked.
@@ -465,6 +478,51 @@ mod tests {
             held_here,
             "said where the kernel cannot hold it, and only there"
         );
+    }
+
+    /// Row 52: what this project allows always runs without asking, reported
+    /// as the project's; a no for the session still refuses it; and a project
+    /// grant reaches nothing a list denies.
+    #[test]
+    fn what_the_project_allows_runs_unless_the_session_said_no() {
+        let root = scratch("project");
+        let environment = environment("[shell.s]\nallow = [\"ls\"]\ndeny = [\"curl\"]\n");
+        let (session, floor) = sandboxes(&root, &environment);
+        let project: BTreeSet<Grant> = ["git", "curl"]
+            .into_iter()
+            .map(|target| Grant {
+                kind: GrantKind::Command,
+                target: target.into(),
+            })
+            .collect();
+        let answers = Answered::default();
+        let ceiling = DraftCeiling::new(
+            &session,
+            Some(&environment),
+            answers.clone(),
+            Authority::Person(None),
+        )
+        .with_project(project);
+        let run = |program: &str| call("run_command", serde_json::json!({ "argv": [program] }));
+        assert!(matches!(
+            ceiling.escalate(&run("git"), &floor),
+            Escalation::Granted(_, GrantScope::Project)
+        ));
+        assert!(
+            matches!(ceiling.escalate(&run("curl"), &floor), Escalation::Refused),
+            "a list's deny is never asked, so a project grant cannot reach it"
+        );
+        answers.lock().unwrap().give(
+            Grant {
+                kind: GrantKind::Command,
+                target: "git".into(),
+            },
+            false,
+        );
+        assert!(matches!(
+            ceiling.escalate(&run("git"), &floor),
+            Escalation::Forbidden
+        ));
     }
 
     /// A resume puts back what the list leaves in force, yes and no.

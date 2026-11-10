@@ -18,8 +18,8 @@ import { $reactive, C79 } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 12
-const FORMAT = 27
+const PROTOCOL = 14
+const FORMAT = 29
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -128,7 +128,7 @@ export const state = $reactive({
   sessions: [],           // live server sessions list: [{ id, title, turns, live?, ... }]
   // Live sessions not on screen that want a look, by id: `"gate"` while one
   // waits for a person, `"done"` once a turn ended there, until it is opened.
-  // See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §6.
+  // See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §6.
   attention: {},
   currentSessionId: "live",
 })
@@ -312,6 +312,9 @@ function onProtocol(message) {
         // plan is the *strictest* one there is, and the panel that drew it as
         // "grants nothing" would be right about a job and wrong about this.
         plan: null,
+        // Nobody approved it. Said here rather than left to a missing plan:
+        // see `job_approved` below.
+        approved: false,
         proposed: null,
         source: null,
         state: "open",
@@ -391,8 +394,8 @@ function onProtocol(message) {
       // patch it where it does; otherwise this line is the job's birth.
       if (state.jobs.some(job => job.id === id)) {
         patchJob(id, message.plan
-          ? { state: "open", plan: message.plan }
-          : { state: "open" })
+          ? { state: "open", plan: message.plan, approved: true }
+          : { state: "open", approved: true })
         break
       }
       state.jobs = [...state.jobs, {
@@ -403,6 +406,12 @@ function onProtocol(message) {
         // The plan as approved, which is what the job's sandbox is built from —
         // the person at the gate may have added what the model forgot.
         plan: message.plan ?? null,
+        // Approved, whatever the line carried. A recording written before
+        // 2026-08-30 approved with no plan on this line, and a job is a draft
+        // because nobody approved it, not because its plan is missing: the
+        // `!plan` rule alone read those jobs as drafts. See
+        // `RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md`.
+        approved: true,
         // Kept beside it: the difference between the two is what a person had
         // to add, which is the cost of the gate.
         proposed: offered ? offered.plan : null,
@@ -451,6 +460,20 @@ function onProtocol(message) {
       // written again.
       const id = message.job ?? message.task
       patchJob(id, { state: "open", summary: null, closedBy: null, replaced: null })
+      break
+    }
+
+    // What was folded behind to keep the window: the turns are kept and
+    // marked, as an eviction's are, and the turn that folded says what it
+    // saved — the line that makes a full window something a person is told.
+    // See `RECORD/2026-11-09.fold-behind.completed.md`.
+    case "compacted": {
+      const folded = new Set(message.turns)
+      const report = { turns: message.turns, tokens: message.tokens, summaryTokens: message.summary_tokens }
+      state.messages = state.messages.map(m =>
+        folded.has(m.turn) ? { ...m, compacted: message.turn }
+          : m.turn === message.turn && m.role === "user" ? { ...m, folding: report }
+            : m)
       break
     }
 
@@ -1030,9 +1053,13 @@ export const approveTask = approveJob
 /// them without asking, until it is taken back. `turn`, `step` and `index`
 /// name the call, so an answer that raced the end of its turn is refused rather
 /// than applied to whatever is held next.
-export function answerCall(turn, step, index, allow, session = false) {
+export function answerCall(turn, step, index, allow, session = false, project = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   const answer = { type: "answer_call", turn, step, allow, session }
+  // Always in this project (protocol 14): a yes written to luu's config for
+  // this folder. Only sent when it is one, so an older server is not asked a
+  // field it would ignore.
+  if (project && allow) answer.project = true
   if (index > 1) answer.index = index
   socket.send(JSON.stringify(answer))
 }
@@ -1375,6 +1402,8 @@ export async function refreshLiveSession() {
       state: j.state,
       summary: j.summary,
       closedBy: j.closed_by || null,
+      // The view says who approved it; a draft has nobody.
+      approved: !!j.approved_by || !!j.plan,
       replaced: j.replaced || null,
     }))
     state.tasks = state.jobs
@@ -1399,6 +1428,10 @@ export async function refreshLiveSession() {
           // the same response a few lines below, had it right.
           evicted: t.evicted_by ?? null,
           pruned: t.pruned_by ?? null,
+          compacted: t.compacted_by ?? null,
+          folding: t.compacted
+            ? { turns: t.compacted.turns, tokens: t.compacted.tokens, summaryTokens: t.compacted.summary_tokens }
+            : null,
         })
       }
       if (t.text || (t.tools && t.tools.length)) {
@@ -1415,6 +1448,7 @@ export async function refreshLiveSession() {
           usage: t.usage || null,
           evicted: t.evicted_by ?? null,
           pruned: t.pruned_by ?? null,
+          compacted: t.compacted_by ?? null,
           startedAt: t.started_at_ms ?? null,
           firstAt: t.first_token_at_ms ?? null,
           endedAt: t.ended_at_ms ?? null,

@@ -72,8 +72,11 @@ the title. Its items are its doors, each with a line under it on what it does:
 until 2026-10-27).
 
 **And the page reads the alternation, on both surfaces.** A fold says which
-half it was — *draft 3* or *job 4*, from the same `!plan` rule the open job's
-menu uses — and why it ended, which is now three rungs and not two:
+half it was — *draft 3* or *job 4*, from the same rule the open job's menu
+uses: no plan **and** nobody approved it, since a recording written before
+2026-08-30 approved jobs with no plan on the line
+([`RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md`](RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md))
+— and why it ended, which is now three rungs and not two:
 `ClosedBy::Approval` beside `User` and `ExitCode`, because under the alternation
 most drafts end by having a plan approved out of them and a recording that
 called that *a person folded it* could not count either. `protocol::VERSION` 8
@@ -116,9 +119,12 @@ grants and still runs `rg` and `ls`, because what a command may *do* is decided
 by the paths it may touch; `cargo test` in a draft now fails when it writes
 `target/`, which is the intended answer and not a gap.
 
-Mechanically it is one expression: `serve` picks the live job's narrowed sandbox
-when a plan is open and **the floor** otherwise, so every place that clears the
-narrowing means the floor without being edited. The floor is
+Mechanically it is one function, `serve::turn_sandbox`, which both the
+selector and the tools read: the live job's narrowed sandbox when a plan is
+open, **the floor** when a draft is or nothing is, and **nothing** (an empty
+plan's narrowing, under `Plan(n)`) for an approved job with no narrowing of its
+own — a plan that stopped resolving does not drop its job to the floor. See
+`RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md`. The floor is
 `Sandbox::read_only`, which downgrades the *explicit* roots in place — the
 implicit ones (`SYSTEM_ROOTS` and `/dev/null`) exist so a subprocess can start
 and have no write bit to take — and stamps `Authority::Draft`, so a refusal says
@@ -153,6 +159,14 @@ reads `.` · runs `rg`, `ls` — and writes only to .tmp · /tmp; anything else 
 asked of you first*. `writes` is on the wire since the floor has some, and it is
 the scratch and nothing more. See
 [`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
+
+**And so does the head, with no gate up.** Most drafting turns happen with
+nothing proposed, so the job menu beside the session's name opens on *What it
+may do*: the same floor in one line for a draft, the approved plan's reads,
+writes and commands for a job, and a click opens Permissions on its policies.
+The trigger's title carries the line too. Nothing new is resolved in the page:
+the floor is `settings.floor` and the plan is the job's own. See
+[`RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md`](RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md).
 
 **A write the floor refuses is asked about, once, where the policy file would
 allow it.** Refused and nothing else, a draft asked to create a file ended with a
@@ -196,6 +210,17 @@ be signed. At the gate, a plan on a session built from lists may get whatever th
 since approving it is that person's yes, for the job; a policy file stays the outer bound. `protocol::VERSION`
 11, `record::FORMAT` 23. See
 [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
+**And since 2026-11-09 a yes may be for the project**: a third button, *Always in this
+project*, writes the grant to luu's own `config.toml` as `[project."<folder>"] commands = […]`
+or `writes = […]`, keyed by the session folder's absolute path — never in the project's tree,
+so a repository grants itself nothing, and allowing `npm` in one folder allows it in no other.
+Every draft of every session in that folder runs it without asking; the ceiling reads the
+table when a turn begins and asks it after the session's own answers, so a session's no still
+refuses what the project allows, and a list's `deny` is never asked so never reaches it. A step
+reports `grant: "project"` (*allowed in this project*), and Settings → Policies lists every
+folder's grants under *Always, by project*, each with a × (`POST /api/grants/project/remove`).
+A yes only: a lasting no is the session's. `protocol::VERSION` 14, `record::FORMAT` 29. See
+[`RECORD/2026-11-09.always-in-this-project.completed.md`](RECORD/2026-11-09.always-in-this-project.completed.md).
 **A person's yes runs what the kernel here cannot hold** (since 2026-10-27): off Linux there is
 no Landlock and no seccomp, and under `enforcement = "kernel"` every command a draft makes was
 refused — after the yes as before it. The ceiling now gives the yes `best-effort` where the
@@ -567,6 +592,7 @@ nothing saying so; see [`RECORD/2026-08-27.the-m4-pro-run.completed.md`](RECORD/
 - **The repository map**: built, and ranked **behind a flag that is off**. Every `.rs` file's definitions with their signatures, bodies elided, from `tree-sitter`'s own `TAGS_QUERY`, in the cached prefix under the tool definitions — where blocks are ordered by how often they are rewritten, and the map changes only when the repository does. `--map-tokens N`, off by default so that every recording made before it stays comparable, and `luu map` prints the exact bytes. Files are outlined in path order until one does not fit; the map then says how many it left out. **`--map-rank` orders them by what the rest of the tree depends on instead** — a reference graph over the same query's `@reference.*` captures, PageRank with a *uniform* teleport, which is what keeps the map a prefix: Aider seeds its ranking with the files in the conversation, and that is the half that would rewrite the block every turn. It is off because it was measured and lost, twice, on two differently-built corpora: at 1024 tokens path order holds five files and the ranking holds two, because rank order puts the big central files first and the fill rule stops at the first file that does not fit — and on a corpus of 38 questions chosen one per file before either order was checked (so the loss cannot be the corpus favouring path order's own holdings), path order named the right file for **100%** of the questions it covered against rank order's **12.5%**, and rank order's denser, more self-referential files pushed a 7B into paragraphs of fabricated Rust that evicted the session's own history 24 times in 38 turns, where path order evicted nothing. `luu map --explain` prints the ranking under either order — each file's score and who references it — so the order the map did not take can be read beside the one it did. To address the oversized file trap and leaf-sink penalty, **`--map-in-degree`** weights inbound references by caller diversity rather than random-walk damping, and **`--map-non-greedy`** skips over files that exceed the remaining token budget to continue packing smaller ones (packing 5 files and 1026/1024 tokens at 1024 tokens, vs 2 files and 664 tokens under greedy fill). This repository is still the argument for doing this properly: its whole outline is **6 327 tokens, 77% of an 8K window**, so at any affordable budget most of it is missing and the alphabet chose which part. What it costs on the grounded script: 870 tokens a turn at `--map-tokens 1024`, +56% on the run's total prompt tokens — and a prefix-reuse number that rises from 93.9% to 96.3% for purely arithmetic reasons, which is why a map-on run is not comparable on reuse to a map-off one. See [`RECORD/2026-08-31.the-repo-map.completed.md`](RECORD/2026-08-31.the-repo-map.completed.md), [`RECORD/2026-09-02.ranking-the-map.completed.md`](RECORD/2026-09-02.ranking-the-map.completed.md), [`RECORD/2026-09-03.the-map-order-probe.completed.md`](RECORD/2026-09-03.the-map-order-probe.completed.md) and [`RECORD/2026-09-04.in-degree-and-fill.completed.md`](RECORD/2026-09-04.in-degree-and-fill.completed.md).
 - **Relevance over recency**: built, measured, and **on this repository's own corpus it is the largest single win the context manager has**. `--select-tokens N` fills the `code` bucket with the definitions *this turn's text points at*, chosen by `agent_core::select` and read through the sandbox by the same loader `--fragment` uses — so a selected fragment enters a turn by the door that already existed, and is gone when the turn is. **The mechanism is `tree-sitter` tags plus what the file says it is for, and the reference graph is off**: on the 38-question corpus, at 1024 tokens, a path-ordered map holds the answer to **3** of the questions and a selection holds **33**, with the right file first 19 times and in the top three 31. The graph hop — one step from a file that matched, which is what this module was expected to be *about* — was implemented, measured, and **lost a third time**: it moves the right file out of first place five times in 38, holds no more targets, and costs 13% more tokens, because on a tree this connected a neighbour is most of the tree. It ships off, switchable, exactly as `--map-rank` did. The doc signal is doing much of the work and the corpus was written from module docs, so the ablation is the honest row: tags and path alone hold **19** of 38 at 1024, still six times the map. What is *not* measured is precision — whether a model uses what it was handed — and that needs a box. Off by default, because it changes every number in every recording made before it, and unlike the map it is **not** cached: a run with selection on is not comparable on prefix reuse to one without. Decided against Aider's implementation and against embeddings; see [`RECORD/2026-08-27.aider-repo-map.completed.md`](RECORD/2026-08-27.aider-repo-map.completed.md) and [`RECORD/2026-09-05.choosing-fragments.completed.md`](RECORD/2026-09-05.choosing-fragments.completed.md). **Precision is now measured too, and the selector is used**: the same 38 questions against `qwen2.5-coder:7b`, one flag apart, answer **33** correctly with selection on and **0** with it off — handed nothing the model does not know the tree is Rust and answers `main.py`. Precision on the 33 targets it held is **91%**, there is no stuck default, and *position inside the bucket does not matter*: held-but-not-first scores 13/14 against first place's 17/19, which retires "it moves the right file out of first place" as a reason to reject anything. The price is now known and it is not the per-turn prompt: a fragment is fused into the turn's user message and **stays in history**, so a 38-turn run evicted 31 times, prefix reuse fell from 93.3% to **17.7%**, and the run took **11.6×** the wall clock of the ungrounded one. Dropping the quoted code from a turn once it is answered is untried and is the same problem as active pruning below. See [`RECORD/2026-09-06.does-the-model-read-it.completed.md`](RECORD/2026-09-06.does-the-model-read-it.completed.md), whose answers are on disk in [`RECORD/runs/2026-09-06.precision/`](RECORD/runs/2026-09-06.precision/). **It is in every surface, not only `chat`**: `serve` takes the same flag, the tree is walked at startup beside the map and **re-stamped before every turn** — `rewalk_sources` re-parses only the files whose mtime or length moved — and a turn selects under the lock that hands out its number. The re-stamp is not an optimisation of the walk, it is a correctness fix: a walk kept from startup does not stop offering a file the session edited, it offers it at the line numbers it had before the edit, and the fragment loader reads the *current* file at them — wrong lines under a right path. It refreshes through the **agency's** sandbox rather than the live job's, because the walk is the session's cache and a narrow plan must not shrink it for every turn after; the narrowing stays at the read. The map is deliberately not rebuilt: it is the cached prefix, and a stale line number a reader follows by hand is not the same failure as a stale range delivered as the definition. There the selection is read through the **live job's** sandbox rather than the policy file — an approved plan narrows what may be *chosen* exactly as it narrows what may be opened, which is what makes a selector admissible behind a gate at all. The consequence is that a plan a 7B wrote bounds the selector's reach: on the end-to-end run the planning call selected over the whole tree at 2 678 prompt tokens, the model's plan granted one file, and the approved turn selected at 797. A person who knows better adds files at the gate, which is what `approve_job` already carries. See [`RECORD/2026-09-06.selection-at-the-gate.completed.md`](RECORD/2026-09-06.selection-at-the-gate.completed.md).
 - **What leaves the history**: **built, three rules, one of them on by default, and each one a session's to choose** — `POST /api/sessions` takes them beside the provider and the posture, so what the paragraph below calls a default is what a session starts on and no longer what a process is stuck with. **Rule A is on and B and C are off**, which is not the three ranked by what they save: ranked that way the winner is C, the only one of the three that has never been put in front of a model. The criterion is *fewest tokens without affecting the result*, and it selects the one rule whose saving has been shown to cost nothing — n=1, and said so where it is decided. A `cat` capped at 8 KiB and a selected fragment are the same object to the window — a block of file bytes that earned its place in *one* turn and is charged to every turn after it — and by turn 20 of the precision run ~90% of the `history` block is quoted code. Three rules over one window, and they are not the same size: two of them reach quoted code and the third reaches the block the first two were named after and could not touch. **Rule A, *do not re-inject*, is built and on by default since 2026-09-19** (`--repeat-once`, `--no-repeat-once`, `Budget::repeat`): a span is rendered by the **oldest** turn of the window that carries it and skipped by every turn after it, the turn being asked included. Oldest and not newest is the whole reason it is cheap — the block above the newest message stays byte-identical, so the only thing that moves is the message that moves anyway — and it is also what stops eviction orphaning a span, because ownership is only ever handed *forward*, to a turn that will outlive the one giving it up. The owner is chosen inside the window being rendered and never over the session: an owner already below the floor is [`the-fold-fix-verified`](RECORD/2026-08-30.the-fold-fix-verified.completed.md)'s failure with a different mechanism, and the precision corpus offers it 22 chances. A fragment's identity is its **path and its bytes**, so the same span after an edit is a different span — which is the right rule for *has this exact block already been rendered* and the wrong one for *is this file's content in this prompt twice*. **So the promise needs a second half, and since 2026-09-20 it has one: the span that is rendered once is the *newest* one.** `code_context` is written when a turn closes and never refreshed, while every turn re-reads its own spans, so a file edited mid-session used to go out as two blocks under one `// path` header with nothing saying which was true — and rule A could not collapse them, because by its own identity rule they are different spans. **Now the newest body of a path wins and the older ones go out as the line that cites them** (`// path — N tokens, superseded`), where *newest* means the body carried by the newest turn that read it, the turn being asked ahead of all of them. **Derived and not stored, which is what makes it a ratchet**: it is computed over every turn the session holds, the evicted ones included, so the newest reader of a path only ever moves forward and a body the session watched go stale cannot come back by anything *leaving* the window — the floor and the prune line each needed a field for that property and this one gets it from the derivation, on `SessionView::counts()`'s argument one structure along. A file edited **back** to what it was is the case that decides the shape: a ratchet over bodies ever found stale would go on citing bytes that are on disk, and a ratchet over readers does not. The citation is **unguarded**, which is the one place it parts company with rule B's: a pruned span's citation is a *saving* and is not taken where it costs more than the span, and this one is a *correction* — what it replaces is not expensive, it is untrue, and being cheap to send is not a reason to send bytes the session knows are stale. It is **rule A's repair and not a fourth rule**: nothing is superseded under `Repeat::Always`, where a prompt carrying one path twice is the documented behaviour and the blocks read as per-turn snapshots, so there is no `--no-supersede` — the way back is `--no-repeat-once`, and a run made without rule A is byte-identical to what it was. The detector stays exactly as it is, unchanged and still computed over what was sent: `Selection::diverged` and the `diverged` **trace** line report every path a render sent under more than one body, and the only evidence the fix works is that they now find nothing. Beside them, `Selection::superseded` and a `superseded` trace line say what the render did instead (`record::FORMAT` 15; `protocol::VERSION` unchanged at 6) — trace for the same reason `pruned` is one, since every turn is still asked, answered and in the transcript and what changed is the prompt. **That bump makes an older line mean something new, which none of the others did**: a stream at 12 to 14 carries `diverged` because the defect was reported and not repaired, and a stream at 15 carries `superseded` where those would have been, so `diverged` empty is *nothing went stale* on an old stream and *everything stale was replaced* on a new one, and the format number is what tells them apart. The measurement that decided it, on [`scripts/tasks/edit-reread.txt`](scripts/tasks/edit-reread.txt) — thirteen turns over a committed scratch tree that reads four files, edits three and asks about two of those again, with a control that must stay quiet and both blind spots in it — is **two edits leaving 8 of 13 prompts carrying two bodies for one path**, six of the eight attaching nothing of that file, so a divergence is a state the window enters rather than an event at the turn that causes it. Against the parent commit, same corpus and same flags: **8 of 13 renders repaired, 10 spans, 898 tokens of stale bytes replaced**, session prefix reuse 93.95% → 87.14% with **every point of that in the two turns that re-read the edited file** — the break is one per *edit* and not one per render, because the citation standing in the old block's place is itself stable — and the history bucket **falling** 7 200 → 6 432 tokens, since a citation is cheaper than the bytes it replaces. The repair is not paid for out of the window; it pays the window back. What it does **not** do is settle whether a model notices: the edits are scripted, so the number is a fact about the corpus, and what a *model* does is the run the corpus exists for. Two blind spots are unchanged and inherited exactly, because the fix reads the same identity the detector does: a file edited after its only read has nothing to contradict it, and two *overlapping* specs of one file (`1-6` and `1-16`) are two paths. See [`RECORD/2026-09-19.one-path-two-bodies.completed.md`](RECORD/2026-09-19.one-path-two-bodies.completed.md), [`RECORD/2026-09-19.a-corpus-that-edits.completed.md`](RECORD/2026-09-19.a-corpus-that-edits.completed.md) and [`RECORD/2026-09-20.the-newest-body-wins.completed.md`](RECORD/2026-09-20.the-newest-body-wins.completed.md), with the run in [`RECORD/runs/2026-09-20.the-newest-body-wins/`](RECORD/runs/2026-09-20.the-newest-body-wins/). On twenty grounded turns at `--select-tokens 1024`, one flag apart: the `code` bucket falls **19.5%** (20 274 → 16 318 tokens), the history does not grow to absorb it, the window fills slowly enough to need **8 cuts instead of 12**, and mean prefix reuse goes from 34.0% to **52.0%** — that last one predicted by nothing and a consequence rather than a claim. The accounting had to follow or the budget would lie: a turn costs its stored count *less what this render drops*, and `Evicted.tokens` is now the difference of two windows rather than the sum of the items below the floor, which was an over-report the moment a span could outlive the turn that owned it. **And since `record::FORMAT` 14 the rule says what it did**: a `repeated` trace line names the turns that gave up spans, how many, and what they would have cost — trace for the reason `pruned` and `diverged` are. Until it, rule A was the only one of the three that reported nothing at all: the number was computed in `split_shown`, subtracted from the `history` bucket and dropped, so a run that collapsed forty spans and one that collapsed none left the same evidence, which is the complaint format 11 was bumped to fix one field along. It is **the sum of the spans a render did not resend** and deliberately not what `Pruned.tokens` is — that one is the difference of two windows precisely because a span its turn owned passes to a younger turn instead of leaving, and this is the other side of the same passing-down, so it is not what the window would have been under `Repeat::Always`. On the edit-and-re-read corpus it is 7 renders and 854 tokens with fragments typed by hand, and **11 renders, 43 spans and 2 466 tokens with a selector on**, which is where the rule's own justification comes from showing up as an arm rather than as a figure. See [`RECORD/2026-09-19.one-counting-surface.completed.md`](RECORD/2026-09-19.one-counting-surface.completed.md) and [`RECORD/runs/2026-09-19.one-counting-surface/`](RECORD/runs/2026-09-19.one-counting-surface/). **Rule B, *prune behind*, is built and off by default** (`--prune-behind`, `Budget::prune`): under pressure the oldest turns of the window give up their spans and keep their exchange — the code becomes the line that cites it (`// path:1-15 — 312 tokens, pruned`), and a turn is evicted whole only when pruning the whole window is still not enough. The prune line is a **second ratchet beside the floor**: it only moves forward, so between two moves the pruned turn's render is byte-identical, and it moves to the **eviction policy's own target**, so depth against frequency stays one trade with one knob rather than a second invented constant. A citation that would cost more than the span it replaces is not taken. It is not monotone under rule A — pruning the turn that *owns* a shared span hands the whole span to a younger turn and adds a citation where it stood, which is bigger — so the line moves to the shallowest position that fits and otherwise to the one that leaves the window smallest, which means **rule B declines where rule A has already taken the saving**. What it buys is not tokens: on the same twenty grounded turns the prompt moves −0.3% and **nothing is evicted at all** — 0 turns dropped against 13, with 13 732 tokens of quoted code out of the window and the whole conversation still in it. Under `--evict block` the line moves **4 times instead of 13** and mean prefix reuse is 69.8% against the 66.5% of the arm that was dropping turns, which is the policy's character being inherited rather than re-invented. A run under the flag says so on the wire: a `pruned` **trace** line names the turns that gave up spans and what the window saved — trace and not protocol, because a pruned turn is still asked, still answered and still in the transcript, so what changed is the prompt and not the conversation (`record::FORMAT` 8, `protocol::VERSION` unchanged at 5). That line says when the rule **fired**, which is not the same fact as which arm the run was: a `--prune-behind` run that pruned nothing was indistinguishable from a run without the flag until the header carried all three rules itself (`record::FORMAT` 11). A resumed session **used to** have nothing to prune, because `Context::from_view` rebuilt turns without their fragments. Since 2026-09-19 it rebuilds them **by reference** — a `grounded` protocol line carries each turn's specs and `from_view` reads them again through the sandbox the resume is under — so a resumed session has spans to prune like any other, and the one it cannot read comes back as this same citation with the reason in it. See [`RECORD/2026-09-19.fragments-by-reference.completed.md`](RECORD/2026-09-19.fragments-by-reference.completed.md). **Rule C, *a result is bytes too*, is built, off by default, and cuts by tool** (`--prune-results`, `Budget::results`): the 8 KiB cap means one `cat` is ~2 000 tokens at the approximate counter — twice what a whole turn selects at `--select-tokens 1024` — charged to every turn after the one that made the call, and until it landed the only thing that ever took it out of the prompt was evicting that turn with its question and its answer. It has no line of its own: rule B already decides which turns are old enough to give something up, and this decides whether tool output is one of the things they give, which is why it is **inert without `--prune-behind`** and why it is a third flag rather than a widening of the second — there is a run on disk under `--prune-behind`, and a flag that quietly starts meaning something else turns a recorded arm into an unrecorded one. What is replaced is the result *whole*, its `[name] ok` head included, so the citation reports the cost of exactly what is no longer there (`[run_command] output — 1 987 tokens, pruned`); the assistant message that asked for it is never rewritten, because it is the model's own words and it is what says which call the line answers. The same guard as a span's citation: one that is not cheaper than what it replaces is not taken. It reaches a case rule B cannot — a turn that ran a tool and selected nothing has no spans to give. It was also the only thing that reached a *resumed* turn at all, while fragments did not survive a resume; now that they do, that is one case narrower and the rule is unchanged. The fold is unaffected either way: `summary_text` builds its evidence from the stored steps, not from what was rendered. What it does **not** have is a number: no run has been made one flag apart, on this or on any corpus. The 8 KiB cap stays what it always was. **And it is three values rather than two**, because tool output is not one kind of thing: `cited_reads` gives up what could be asked for again — a file's bytes, a directory listing, the same object as a selected span by this project's own account — and keeps what a command found, which is a *record of something that happened* rather than a view of something still there. That is where the measured saving actually came from: every one of the 20 turns that freed 32 752 tokens called `read_file` on a 136 KB file against the 8 KiB cap, and **no corpus here has ever pruned a command's output**, so `cited_reads` ships the whole number and makes none of the claim item 5 is open about. `cited` still takes both and is unchanged — there is a run on disk under it, and a value that quietly starts meaning something narrower turns a recorded arm into an unrecorded one, which is the sentence rule C's own flag exists because of. `--prune-results` still means `cited` for that reason; `cited_reads` is reachable from `[resend]` and from the page and not from the flag. An **unknown tool's output is evidence**: a sixth tool arriving as cheap-to-lose would be the same failure one level down, so the registry's size is asserted in a test and a new tool has to say which it is. The render and the accounting go through **one** function, because under two values each site could carry its own `match` and stay honest, and under three a second copy would be a window whose reported cost and actual cost differ by exactly one tool's output. See [`RECORD/2026-09-07.a-span-is-rendered-once.completed.md`](RECORD/2026-09-07.a-span-is-rendered-once.completed.md), [`RECORD/2026-09-08.prune-behind.completed.md`](RECORD/2026-09-08.prune-behind.completed.md) and [`RECORD/2026-09-09.what-a-result-costs.completed.md`](RECORD/2026-09-09.what-a-result-costs.completed.md), with the runs in [`RECORD/runs/2026-09-07.repeat-once/`](RECORD/runs/2026-09-07.repeat-once/) and [`RECORD/runs/2026-09-08.prune-behind/`](RECORD/runs/2026-09-08.prune-behind/); the proposal the first two rules come from is [`RECORD/2026-09-06.what-leaves-the-history.completed.md`](RECORD/2026-09-06.what-leaves-the-history.completed.md).
+- **A fourth rung, *fold behind*, between rule C and eviction: built, off by default, not yet measured** (`--fold-behind`, `[resend] fold = "behind"`, `Budget::fold`). Where pruning has not made the window fit, the open job's oldest turns become **one summary of their evidence** — the body a closed job's fold already writes, from the turns' own steps and fragments and never by a model — sent as the person's own prompts, as typed, and that summary. A third ratchet beside the floor and the prune line, moved as little as fits (or to the smallest window where none does), so the summary is byte-identical between moves; eviction still runs after it, for a window the summary does not save, and a closed job's fold is left alone. **It is what makes a full window visible**: a `compacted` protocol line (`protocol::VERSION` 13, `record::FORMAT` 28) names the turns and what they cost against the summary, the chat says *turns 1–6 compacted to keep the window: 4 800 → 310 tokens* at the turn that folded, and marks the folded turns *in the prompt as a summary since turn N*. Turning it off mid-session waits for the next session, prune's rule. Its cost is the one the 2026-08-30 fold probe measured — a summary of evidence keeps what was done and loses what the model concluded in prose — and how much that costs an answer is an arm of roadmap row 38's run. See [`RECORD/2026-11-09.fold-behind.completed.md`](RECORD/2026-11-09.fold-behind.completed.md).
 
 ## Tool calling: how actions actually get executed
 
@@ -643,7 +669,13 @@ The model never executes anything directly — it only emits a structured reques
   [`the-alternation-that-was-not-one`](RECORD/2026-09-14.the-alternation-that-was-not-one.completed.md),
   [`what-constrain-does`](RECORD/2026-09-14.what-constrain-does.completed.md)):
   7/15 clean calls against 3/15 unconstrained on the tool-call probe, and the
-  fence-continuation failure eliminated outright. `--constrain schema` sends
+  fence-continuation failure eliminated outright. **And a fence under a tool's own
+  name (`` ```read_file ``) is never completed** under the grammar: every
+  `` ```<tool> `` is avoided in the same automaton as the trigger
+  (Aho-Corasick, of which the one-trigger case is the KMP it was), its last
+  character not offered — forbidden, not forced toward a call, since the
+  drifted body lacks the name. Built, not yet measured on a server
+  ([`a-tool-s-own-fence-is-never-typed`](RECORD/2026-11-09.a-tool-s-own-fence-is-never-typed.completed.md)). `--constrain schema` sends
   `response_format`, forcing *every* reply into a call with no "just answer"
   branch at all — measured to exhaust `--max-tool-steps` on **15 of 15** probe
   prompts, because a model given a result from its own call and still not
@@ -773,6 +805,11 @@ TMPDIR = "./.tmp"               # `./` is under the session's folder, resolved t
 ```
 
 - **Longest match wins**, so a narrower rule under a broader one grants more.
+  **Two rules for one path are one**, granting the more of the two, however
+  the path was written and in whichever order: a file's `.` at read and
+  `--allow-write .`, or a plan's file in both `files` and `writes`. The kernel
+  was always given the union; the in-process check now answers the same
+  ([`RECORD/2026-11-09.one-rule-per-path.completed.md`](RECORD/2026-11-09.one-rule-per-path.completed.md)).
 - **`[sandbox.env]` says where a child's scratch and its tools' homes go.** A
   value that is `.` or starts with `./` is resolved against the session's
   folder; anything else is passed as written. Set last, over what `serve`
@@ -1729,7 +1766,7 @@ and `[sandbox.env]` moved each session's cargo home into its own `.tmp`. A host 
 
 A user writes none of it, and a refusal says the role, not the address. For a
 login the `Host` check against DNS rebinding is skipped: the cookie is
-`SameSite=Strict` and `Origin` was checked. Peers and `[host.*]` stay off on
+`SameSite=Strict` and `Origin` was checked. Peers stay off on
 a server with users. **Any logged-in user may point a session at any provider
 in `config.toml`**, wherever it sends, because an admin or an owner wrote it
 there; a `private` server keeps prompts on the machine unless a person at it
@@ -3015,7 +3052,7 @@ stream would invent line orders and timings the session never had.
 **Resuming, and sessions side by side.** `SessionStore::resume`
 reconstructs the write-side `AgentContext` and turn counter from stored turns and
 jobs, validated in `store_parity.rs`. **Since 2026-10-30 several sessions are live at
-once** ([`RECORD/2026-10-30.sessions-side-by-side.WIP.md`](RECORD/2026-10-30.sessions-side-by-side.WIP.md)): `App` holds a map of `LiveSession`s — each its own destination,
+once** ([`RECORD/2026-10-30.sessions-side-by-side.completed.md`](RECORD/2026-10-30.sessions-side-by-side.completed.md)): `App` holds a map of `LiveSession`s — each its own destination,
 agency (worker, container), grants, fold, stream and event channel — and which one was
 used most recently. `POST /api/sessions` makes one **beside** the others, built on
 `LiveSession::blank`, and makes it current; `POST /api/sessions/:id/resume` makes a stored
@@ -3035,7 +3072,13 @@ used idle one to sleep — checkpointed, its worker ended, out of the map, resum
 and is refused only when none may sleep. **`idle-minutes`** (30) sleeps an idle one on its own;
 the current one, one with a client, a turn or a proposal never sleeps. `DELETE
 /api/sessions/:id/live` sleeps one on request; a live session cannot be deleted, and archiving
-one sleeps it first. Engines stop only when no live session sends to them. **Each works in its own folder**,
+one sleeps it first. Engines stop only when no live session sends to them, and **a second local
+model is said before the click**: the new session's dialog asks `GET /api/engines/beside` what
+the chosen provider and model would load and what the engines already hold, and names both with
+their weights' size on disk and the total — or, where the same engine holds another model for a
+live session, that every turn of either reloads it
+([`RECORD/2026-11-09.a-second-local-model-warned.completed.md`](RECORD/2026-11-09.a-second-local-model-warned.completed.md)).
+**Each works in its own folder**,
 chosen under where `serve` was started (`folder` on `POST /api/sessions`, root-relative, never
 above the root): it is the base of its sandbox, so its tree, its git panel (status paths made
 the folder's with `git rev-parse --show-prefix`), its repository map and its selection walk are
@@ -3158,17 +3201,20 @@ against the mechanism that was built first and removed:
 ### Another host is another `luu serve`, reached through this one
 
 **The rule above is why a remote project is a page that moves, not a session.**
-`[host.<name>]` in `config.toml` names another machine's `luu serve` by `url` and
-`token-file`, and this server forwards `/h/<name>/api/*` and `/h/<name>/ws*` there
-with that token, dropping its own. Everything else under `/h/<name>/` is **this**
-server's page, whose every request is relative, so served there its API is the
-host's. The session is made, recorded and approved on the host. This server
-carries bytes and keeps nothing.
+Another machine's luu is one linked by key (the section below), and this
+server forwards `/h/<name>/api/*` and `/h/<name>/ws*` to it over the link.
+Everything else under `/h/<name>/` is **this** server's page, whose every
+request is relative, so served there its API is the other luu's. The session
+is made, recorded and approved there. This server carries bytes and keeps
+nothing.
 
-The browser names a host and never a URL. The token is a path the page never
-reads. The proxy and `PUT /api/hosts` answer only on a loopback-bound server to
-a loopback `Host`, and an `Origin`, when there is one, must be this server: off
-loopback, this server's token would carry the host's approvals. The project
+The browser names a linked luu and never a URL. `/h/*` answers only on a
+loopback-bound server to a loopback `Host`, and an `Origin`, when there is one,
+must be this server: off loopback, this server's token would carry what the
+link lets this machine do. **`[host.<name>]`** — a URL and a bearer token in a
+file, the first way this was built — **was removed on 2026-11-09**, with no
+compatibility: a link by key did everything it did
+([`RECORD/2026-11-09.five-decisions.WIP.md`](RECORD/2026-11-09.five-decisions.WIP.md) §72(c)). The project
 modal behind the inspector's foot is host, then folder, and *Use this folder*
 keeps the session on screen — or, on another host, loads that host's page and
 the session it has. Where a session runs and what it sends to are the sessions
@@ -3202,12 +3248,17 @@ luu user key add ana@example.com "$(luu link key)"  # online, or Account → Key
   from `luu config server`, and read only on a server with users. Its own
   port, because an Ingress or Caddy carries HTTP only. The chart gives it a
   Service, and compose publishes it.
+  **Read when `serve` starts, or started later from Remote access** (*Take
+  links*, `POST /api/peers/listen`), which binds it at once and writes the
+  table; once listening, the port stays for the life of `serve`, since moving
+  it would drop every link
+  ([`RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`](RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md)).
 - **The online side.** A key's `tcpip-forward` registers its user and its
   name (the SSH user), and a newer link with the same pair replaces the older
   at once. `/h/<name>/api/*` and `/h/<name>/ws*` go over one
   `forwarded-tcpip` channel per request, HTTP/1.1 through `hyper`. They are
   for that user only: anyone else gets the 404 a missing one gets.
-  `/api/hosts` lists a user's linked luus, and never `[host.*]`.
+  `/api/hosts` lists a user's linked luus.
 - **The dialing side.** `[peer.<name>]` holds `url`, `ssh`, `host-key`,
   `name`, `dial` and `may`. `luu serve` dials each peer:
   - the wait starts at 1 s and doubles up to 30 s, and goes back to 1 s once
@@ -3217,7 +3268,7 @@ luu user key add ana@example.com "$(luu link key)"  # online, or Account → Key
   - a keepalive goes every 30 s.
 - **A channel is served by this luu's own router behind a peer gate, never as
   loopback.** `may` is `sessions` (by default: every read, and a session's
-  writes), `terminal` and `settings`. Remote access, `[host.*]`, logins and
+  writes), `terminal` and `settings`. Remote access, logins and
   `/h/*` are never a peer's. Past the gate the request is made to look like
   this machine's own page, so every check below it reads it as it already
   knows how.
@@ -3242,6 +3293,10 @@ exact name wins.
   `GET /api/infer` (what it offers: backend, model, window, transport),
   `GET /api/infer/<p>/models`, and `/api/infer/<p>/to/<path>`, which passes a
   request to that provider's own URL with its engine started and its key added.
+  **The engine is started on the model the request names**, as a session's
+  choice moves it at home: a catalog reference for llama.cpp and mlx, a Strata
+  id for Strata, and one the profile has not switched off; anything else
+  leaves it on the table's model.
 - **It offers everything a session there can use**, less a provider with
   `offer = false`: a switch in Remote access at home, the file on a server.
 - **Who reaches it.**
@@ -3265,7 +3320,7 @@ exact name wins.
   who may reach the port*) does not reach a provider through the user's own
   link: the link is theirs, and choosing it per session is typing it.
 
-**A luu without users accepts links too**, and that is what replaces a
+**A luu without users accepts links too**, and that is what replaced
 `[host.*]` and its token:
 - `[server] ssh` is read on it as well. Who may link is a `[peer.<name>]`
   with `key = "ssh-ed25519 …"`, written by `luu link allow <name> <key>` or
@@ -3280,11 +3335,10 @@ exact name wins.
 - **Providers cross on these links too**, both ways.
 - `/api/link.json` gives the address from the request's own `Host` when
   there is no `ssh-public` and no origin.
-- The project modal lists the linked luus beside the hosts, and *Link a luu*
-  opens Remote access.
-- **A `[host.*]` still works and can still be edited, and is no longer
-  added from the page.** Removing the table would refuse every
-  `config.toml` that has one.
+- The project modal lists the linked luus, and *Link a luu* opens Remote
+  access.
+- **`[host.*]` is gone** (2026-11-09): a `config.toml` that still has one is
+  refused like any unknown table.
 
 **What a link trusts:** the online server ends TLS for the browser and holds
 the connection, so it sees what crosses it. See

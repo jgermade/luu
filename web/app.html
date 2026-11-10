@@ -402,7 +402,7 @@
 
   // The session on screen works in its own folder; when another one comes on
   // screen — a new session, a resume, another tab's switch — the panels follow
-  // its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+  // its folder. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
   $: if (loaded && state.settings?.base && state.settings.base !== workspace.base) followFolder(state.settings)
 
   // Live sessions not on screen that finished a turn or wait at their gate:
@@ -475,7 +475,15 @@
   // below and the transcript's folds both read this, because the page calling
   // the same job a draft in one panel and a job in another is what
   // `RECORD/2026-09-21.the-alternation-on-the-page.completed.md` found.
-  const isDraft = job => !!job && !job.plan
+  //
+  // And nobody approved it: a recording written before 2026-08-30 approved
+  // jobs with no plan on the line, and the rule without `approved` read them
+  // as drafts. Row 45.
+  const isDraft = job => !!job && !job.plan && !job.approved
+  // `turns 1-6`, or `turn 4`: what a fold behind took, as its own line says it.
+  const foldedSpan = turns => turns.length === 1
+    ? `turn ${turns[0]}`
+    : `turns ${turns[0]}–${turns[turns.length - 1]}`
   $: drafting = isDraft(live)
   // Whether the server would take a reopen of this one: `Context::reopen_job`
   // succeeds for the **last** job and no other, because reopening an earlier
@@ -493,6 +501,31 @@
   // sandbox, disagreeing with the first at the one moment somebody is deciding.
   // Absent in a recording, whose settings are the ones it was replayed with.
   $: floor = state.settings?.floor || null
+  // The same facts in one line, for where no gate is up: the head's job menu,
+  // which is on screen for every turn of a draft. Most drafting turns happen
+  // with nothing proposed, and the gate was the only place that said what they
+  // may reach. A job says its plan instead, which is what holds its turns. See
+  // `RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md`.
+  const listed = (words, xs) => xs?.length ? `${words} ${xs.join(" · ")}` : null
+  const floorLine = f => !f ? null : [
+    `reads ${f.reads?.length ? f.reads.join(" · ") : "nothing"}`,
+    listed("runs", f.commands),
+    f.network ? "reaches the network" : null,
+    f.writes?.length ? `writes only to ${f.writes.join(" · ")}` : "writes nothing",
+  ].filter(Boolean).join(" · ") + (f.asks ? "; anything else is asked" : "")
+  const planLine = p => !p ? null : [
+    `reads ${p.files?.length ? p.files.join(" · ") : "nothing"}`,
+    listed("writes", p.writes),
+    listed("runs", p.commands),
+    // Asked and bounded by the session, as the gate says it: a plan asking
+    // for the network in a session with none reaches nothing.
+    p.network && state.settings?.posture?.network !== false ? "reaches the network" : null,
+  ].filter(Boolean).join(" · ")
+  $: reach = drafting ? floorLine(floor) : planLine(live?.plan)
+  const onJobMenu = value =>
+    value === "reach" ? openPermissions("policies")
+      : value === "plan" ? requestPlan()
+        : closeJob(live?.id)
   $: planTasks = proposed ? (proposed.plan.tasks || proposed.plan.steps || []) : []
   $: declares = proposed
     ? planTasks.length + proposed.plan.files.length + proposed.plan.commands.length
@@ -936,13 +969,14 @@
            were a row of their own over the composer until 2026-10-27. -->
       <span :if="live &amp;&amp; !proposed" class="job-menu">
         <Menu size="sm" variant="ghost" :label="drafting ? 'draft' : 'plan'"
-              :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}`"
+              :title="`${drafting ? 'draft' : 'job'} ${live?.id} · ${live?.objective || ''}${reach ? ` — ${reach}` : ''}`"
               :disabled="replaying"
               :items="[
+                ...(reach ? [{ value: 'reach', label: 'What it may do', note: reach }, '-'] : []),
                 ...(drafting ? [{ value: 'plan', label: 'Plan this', note: 'what was drafted, at the gate', disabled: running }] : []),
                 { value: 'close', label: 'Close & fold', note: 'one summary from here on', disabled: running },
               ]"
-              @select="$event.detail === 'plan' ? requestPlan() : closeJob(live?.id)" />
+              @select="onJobMenu($event.detail)" />
       </span>
 
       <div class="acts">
@@ -1004,7 +1038,16 @@
                  message saying what the page already shows. What stays is the
                  line that says something only some messages have: that the
                  prompt no longer carries them. -->
-            <div :if="entry.message.evicted || entry.message.pruned" class="cut">
+            <!-- The turn whose window was full said so: what it folded, and
+                 what that saved. Row 21's answer: a full window is told, not
+                 absorbed. -->
+            <div :if="entry.message.folding" class="cut">
+              <span class="folded">
+                {{ foldedSpan(entry.message.folding.turns) }} compacted to keep the window:
+                {{ entry.message.folding.tokens }} → {{ entry.message.folding.summaryTokens }} tokens
+              </span>
+            </div>
+            <div :if="entry.message.evicted || entry.message.pruned || entry.message.compacted" class="cut">
               <!-- Kept and marked, never removed: the prompt no longer carries
                    this and the transcript still has to be able to say so. -->
               <span :if="entry.message.evicted" class="gone">
@@ -1015,8 +1058,13 @@
                    that reason, and not shown at all on a turn that was
                    afterwards evicted whole — there the stronger fact is the
                    true one. -->
-              <span :if="entry.message.pruned && !entry.message.evicted" class="cited">
+              <span :if="entry.message.pruned && !entry.message.evicted && !entry.message.compacted" class="cited">
                 code out of the prompt since turn {{ entry.message.pruned }}
+              </span>
+              <!-- Folded behind: still in the prompt, as a summary of what it
+                   did. Not struck through, and not shown on one evicted since. -->
+              <span :if="entry.message.compacted && !entry.message.evicted" class="cited">
+                in the prompt as a summary since turn {{ entry.message.compacted }}
               </span>
             </div>
             <div :if="!entry.parts" class="text">{{ entry.message.text }}</div>
@@ -1817,6 +1865,7 @@
   article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
   .gone { color: var(--luu-warn); text-transform: none; letter-spacing: 0; }
   .cited { color: var(--luu-fg-muted); text-transform: none; letter-spacing: 0; }
+  .folded { color: var(--luu-accent); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* A fenced block in a reply: code on a card of its own, its language and a
      copy button over it, scrolled sideways rather than wrapped. */

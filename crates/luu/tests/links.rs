@@ -951,3 +951,216 @@ async fn two_luus_without_users_link_by_key_and_open_each_other() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// A `llama-server` that answers anything with the `-m` it was started on,
+/// and writes each start down. Python, as `kubernetes_seam.rs`'s fake kubectl
+/// is; it exits on its own after a minute, so a killed `serve` leaves nothing.
+const FAKE_LLAMA: &str = r#"#!/usr/bin/env python3
+import http.server, json, sys, time
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+model = args[args.index("-m") + 1] if "-m" in args else ""
+with open(sys.argv[0] + ".starts", "a") as log:
+    log.write(model + "\n")
+class Answer(http.server.BaseHTTPRequestHandler):
+    def reply(self):
+        length = int(self.headers.get("content-length") or 0)
+        self.rfile.read(length)
+        body = json.dumps({"loaded": model}).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_GET = do_POST = reply
+    def log_message(self, *_):
+        pass
+server = http.server.HTTPServer(("127.0.0.1", port), Answer)
+server.timeout = 0.5
+end = time.time() + 60
+while time.time() < end:
+    server.handle_request()
+"#;
+
+/// Row 72(b): a request a linked luu sends to one of this luu's providers
+/// names a model, and the provider's llama.cpp engine is started on it — the
+/// way a local session's choice moves the engine — rather than on its table's.
+/// Asked of `/api/infer` directly, which is the same handler the link's
+/// channel reaches. See
+/// `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+#[tokio::test]
+async fn a_linked_request_starts_the_engine_on_the_model_it_names() {
+    let python = Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !python {
+        eprintln!("skipped: the fake llama-server needs python3");
+        return;
+    }
+    let home = scratch("engine-model");
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    std::fs::create_dir_all(home.join("models")).unwrap();
+    let fake = home.join("bin/llama-server");
+    std::fs::write(&fake, FAKE_LLAMA).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    for name in ["first", "second"] {
+        std::fs::write(home.join(format!("models/{name}.gguf")), b"GGUF").unwrap();
+    }
+    let port = free_port();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[server]\nbind = \"127.0.0.1:0\"\n\n\
+             [engine.gemma]\nkind = \"llama\"\nbinary = \"{}\"\nport = {port}\n\
+             model = \"luu:first.gguf\"\n\n\
+             [provider.gpu]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:{port}/v1\"\n\
+             model = \"luu:first.gguf\"\nengine = \"gemma\"\n",
+            fake.display()
+        ),
+    )
+    .unwrap();
+    let server = start(&home);
+    let ask = |model: &'static str| {
+        let address = server.address.clone();
+        async move {
+            reqwest::Client::new()
+                .post(format!(
+                    "http://{address}/api/infer/gpu/to/chat/completions"
+                ))
+                .header("Origin", format!("http://{address}"))
+                .json(&serde_json::json!({ "model": model, "messages": [] }))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let answer = ask("luu:second.gguf").await;
+    assert_eq!(answer.status(), 200, "{}", server.said.lock().unwrap());
+    let answer: Value = answer.json().await.unwrap();
+    assert!(
+        answer["loaded"].as_str().unwrap().ends_with("second.gguf"),
+        "the engine answered on {answer}, not the model the request named",
+    );
+
+    // A name that is not on this machine leaves it to the table's model.
+    let answer: Value = ask("gpt-4o").await.json().await.unwrap();
+    assert!(
+        answer["loaded"].as_str().unwrap().ends_with("first.gguf"),
+        "{answer}"
+    );
+
+    let starts = std::fs::read_to_string(home.join("bin/llama-server.starts")).unwrap();
+    let starts: Vec<&str> = starts.lines().collect();
+    assert_eq!(starts.len(), 2, "one start per model: {starts:?}");
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Row 72(a): a luu started without `[server] ssh` takes links when Remote
+/// access asks, without a restart — and writes the table for the next start.
+/// Then a luu links to it, by key, the way it would to one that started
+/// listening. See `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+#[tokio::test]
+async fn a_luu_takes_links_when_asked_without_a_restart() {
+    let laptop = scratch("late-laptop");
+    let station = scratch("late-station");
+    let port = free_port();
+    std::fs::write(
+        laptop.join("config.toml"),
+        "[server]\nbind = \"127.0.0.1:0\"\n",
+    )
+    .unwrap();
+    let key = run(&laptop, &["link", "key"]).trim().to_string();
+    std::fs::write(
+        station.join("config.toml"),
+        "[server]\nbind = \"127.0.0.1:0\"\n",
+    )
+    .unwrap();
+    run(&station, &["link", "allow", "laptop", &key]);
+    let ws = start(&station);
+    let client = reqwest::Client::new();
+
+    // Not yet: no link.json to dial by.
+    let before = reqwest::get(format!("http://{}/api/link.json", ws.address))
+        .await
+        .unwrap();
+    assert_eq!(before.status(), 404);
+
+    let listen = |ssh: String| {
+        let client = client.clone();
+        let address = ws.address.clone();
+        async move {
+            client
+                .post(format!("http://{address}/api/peers/listen"))
+                .header("Origin", format!("http://{address}"))
+                .json(&serde_json::json!({ "ssh": ssh }))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let refused = listen("nowhere".to_string()).await;
+    assert_eq!(refused.status(), 422, "an address and port, or nothing");
+    let started = listen(format!("127.0.0.1:{port}")).await;
+    assert_eq!(started.status(), 200, "{}", ws.said.lock().unwrap());
+    let view: Value = started.json().await.unwrap();
+    assert_eq!(view["listening"]["port"], port, "{view}");
+    let written = std::fs::read_to_string(station.join("config.toml")).unwrap();
+    assert!(
+        written.contains(&format!("ssh = \"127.0.0.1:{port}\"")),
+        "{written}"
+    );
+    // A second ask keeps the port it has: moving it would drop every link.
+    assert_eq!(listen("127.0.0.1:1".to_string()).await.status(), 409);
+
+    // And a luu links to it, as to one that listened from the start.
+    run(
+        &laptop,
+        &[
+            "link",
+            "add",
+            &format!("http://{}", ws.address),
+            "--name",
+            "laptop",
+            "--as",
+            "ws",
+        ],
+    );
+    let lap = start(&laptop);
+    let mut state = String::new();
+    for _ in 0..100 {
+        state = peer_state(&lap.address, "ws").await;
+        if state == "connected" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        state,
+        "connected",
+        "laptop: {}\nstation: {}",
+        lap.said.lock().unwrap(),
+        ws.said.lock().unwrap()
+    );
+    let settings: Value = reqwest::get(format!("http://{}/h/ws/api/settings", lap.address))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        settings["home"].as_str().map(Path::new),
+        Some(station.as_path()),
+        "{settings}"
+    );
+    drop(lap);
+    drop(ws);
+    let _ = std::fs::remove_dir_all(&laptop);
+    let _ = std::fs::remove_dir_all(&station);
+}

@@ -2207,6 +2207,89 @@ async fn a_write_added_at_the_gate_goes_through() {
     let _ = std::fs::remove_file(&scratch);
 }
 
+/// Row 21, over the socket: under fold behind, a window that fills says
+/// `compacted` — the turns that now go out as one summary — before it would
+/// say `evicted`, and the read side marks them.
+#[tokio::test]
+async fn a_full_window_folds_behind_before_it_evicts_and_says_so() {
+    let answer = "padding ".repeat(60);
+    let prefix = ApproximateCounter.count(SYSTEM)
+        + ApproximateCounter.count(&Tools::standard().definitions());
+    let address = server_full(
+        vec![PLAN.into(), answer],
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(prefix + ROOM_FOR_HISTORY, 0, Eviction::Turn)
+            .folding(agent_core::context::Fold::Behind),
+    )
+    .await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "plan_proposed").await;
+    send(&mut socket, serde_json::json!({"type": "approve_plan"})).await;
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "now do it"}),
+    )
+    .await;
+    until(&mut socket, "ended").await;
+
+    let mut compacted = None;
+    for n in 0..8 {
+        send(
+            &mut socket,
+            serde_json::json!({"type": "prompt", "text": format!("question {n}")}),
+        )
+        .await;
+        loop {
+            let message = next_message(&mut socket).await;
+            match message["type"].as_str().expect("a typed message") {
+                "compacted" => compacted = Some(message),
+                "evicted" if compacted.is_none() => {
+                    panic!("evicted before anything was folded: {message}")
+                }
+                "ended" => break,
+                _ => continue,
+            }
+        }
+        if compacted.is_some() {
+            break;
+        }
+    }
+    let compacted = compacted.expect("eight turns into a window this size, something folded");
+    let folding = compacted["turn"].as_u64().expect("the folding turn");
+    let turns: Vec<u64> = compacted["turns"]
+        .as_array()
+        .expect("the turns folded")
+        .iter()
+        .map(|turn| turn.as_u64().expect("a turn number"))
+        .collect();
+    assert!(
+        !turns.is_empty() && turns.iter().all(|turn| *turn < folding),
+        "{compacted}"
+    );
+    assert!(
+        compacted["summary_tokens"].as_u64() < compacted["tokens"].as_u64(),
+        "a summary that saves nothing is not taken: {compacted}"
+    );
+
+    let api = get(&address, "/api/sessions/live/turns").await;
+    let first = api
+        .as_array()
+        .expect("the turns")
+        .iter()
+        .find(|turn| turn["turn"] == turns[0])
+        .expect("a folded turn is still in the transcript");
+    assert_eq!(first["compacted_by"], folding, "{first}");
+}
+
 /// The window filling up, over the socket: the tombstone that says what the
 /// session forgot. Before it, a client watched the history bucket shrink and
 /// could not tell the policy from the arithmetic.
@@ -2878,7 +2961,7 @@ async fn multi_session_lifecycle_and_switching() {
 
     // Now session one is the current one, and session two is still live
     // beside it — a resume no longer ends the session it moved away from
-    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`). So it is put to
+    // (`RECORD/2026-10-30.sessions-side-by-side.completed.md`). So it is put to
     // sleep before it can be deleted.
     let still_live = delete(&address, &format!("/api/sessions/{session_two_id}")).await;
     assert_eq!(still_live.status(), reqwest::StatusCode::BAD_REQUEST);
@@ -3506,7 +3589,7 @@ async fn a_resume_keeps_the_posture_a_sessions_jobs_were_approved_under() {
     // Still live beside the new one, it is not rebuilt anywhere: it keeps the
     // posture its jobs were approved under, and the rule below is about a
     // session that has to be made again. So it is put to sleep first
-    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    // (`RECORD/2026-10-30.sessions-side-by-side.completed.md`).
     let slept = client
         .delete(format!("http://{address}/api/sessions/{contained}/live"))
         .send()
@@ -4453,7 +4536,7 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     let id = created["id"].as_str().expect("the second session's id");
     // Still live beside the third, a resume would only attach to it and write
     // nothing; asleep, it is made again and re-bases the file, which is what
-    // this half is about (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    // this half is about (`RECORD/2026-10-30.sessions-side-by-side.completed.md`).
     let slept = client
         .delete(format!("http://{address}/api/sessions/{id}/live"))
         .send()
@@ -4598,7 +4681,7 @@ async fn a_turn_at_its_tool_limit_asks_and_a_person_lets_it_go_on() {
 /// it — the first answers on its own socket, its turn runs while the second is
 /// the current one, and `?session=` reaches it over HTTP. A session that is not
 /// live is a 404 by either door. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 #[tokio::test]
 async fn two_sessions_live_side_by_side() {
     let dir = std::env::temp_dir().join(format!("luu-side-by-side-{}", std::process::id()));
@@ -4731,7 +4814,7 @@ async fn one_session_too_many_puts_the_oldest_idle_one_to_sleep() {
 /// tree is that folder's, a folder outside the root is refused, a second
 /// session in the same folder is told it shares it, a session moves its folder
 /// before its first turn and not after, and one put to sleep comes back in
-/// its folder. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+/// its folder. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
 #[tokio::test]
 async fn a_session_works_in_its_own_folder() {
     let root = std::env::temp_dir().join(format!("luu-folders-{}", std::process::id()));

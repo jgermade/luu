@@ -226,7 +226,7 @@ test("an earlier session is archived, restored, and deleted after a confirmation
  * container, and the history says so — and offers to put it to sleep rather
  * than delete it, which the server refuses for a live one. Asleep, it is an
  * ordinary earlier session; opened, it is live again. See
- * `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §6.
+ * `RECORD/2026-10-30.sessions-side-by-side.completed.md` §6.
  */
 test("a session left for another stays live, and is put to sleep from the history", async ({ page }) => {
   const errors = []

@@ -7,7 +7,7 @@
   // each tab decides, `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`
   // and `RECORD/2026-10-21.sessions-that-name-themselves.completed.md`.
   const [
-    { state, resumeSession, deleteSession, archiveSession, sleepSession, refreshSessionsList, offeredProviders },
+    { state, resumeSession, deleteSession, archiveSession, sleepSession, refreshSessionsList, offeredProviders, apiHeaders },
     {
       ui, editStarter, startSession, continueHere, showSessionsTab, closeSessions,
       chooseRuntime, chooseList,
@@ -56,6 +56,51 @@
   // one label over two backends is a comparison nobody can make.
 
   $: profileNames = offeredProviders()
+
+  // What a session started here would load, beside what is loaded already —
+  // said before the click, because a second local model is memory, and the
+  // first one that does not fit is found by a machine swapping. Asked of the
+  // server, which knows the engines and the files; worded here. See
+  // `RECORD/2026-11-09.a-second-local-model-warned.completed.md`.
+  let alongside = null
+  const asking = (() => {
+    let last = ""
+    return (provider, model) => {
+      const asked = `${provider}\n${model}`
+      if (asked === last) return asked
+      last = asked
+      alongside = null
+      if (!provider) return asked
+      const query = new URLSearchParams({ provider, model: model || "" })
+      fetch(`./api/engines/beside?${query}`, { headers: apiHeaders() })
+        .then(answer => answer.ok ? answer.json() : null, () => null)
+        .then(found => { if (last === asked) alongside = found })
+      return asked
+    }
+  })()
+  $: besideAsked = asking(ui.starter?.provider || "", ui.starter?.model || "")
+  const GB = bytes => `${(bytes / 1e9).toFixed(1)} GB`
+  const modelSaid = m => `${m.label || m.model || "the model of " + m.engine}${m.size ? ` (${GB(m.size)})` : ""}`
+  const plural = (n, one) => `${n} live ${one}${n === 1 ? "" : "s"}`
+  const warnOf = answer => {
+    const loads = answer?.loads
+    if (!loads) return null
+    const same = answer.loaded.find(m => m.engine === loads.engine)
+    // The same engine on the same model: shared, nothing new in memory.
+    if (same && same.model === loads.model) return null
+    if (same && same.sessions) {
+      return `Engine ${loads.engine} holds ${modelSaid(same)} for ${plural(same.sessions, "session")}. ` +
+        `Starting here reloads it on ${modelSaid(loads)}, and ${same.sessions === 1 ? "that session reloads" : "each of them reloads"} ` +
+        `its own on its next turn: one engine, two models, and every turn waits for a load.`
+    }
+    const others = answer.loaded.filter(m => m.engine !== loads.engine)
+    if (!others.length) return null
+    const sizes = [loads, ...others].map(m => m.size)
+    const total = sizes.every(Boolean) ? ` — about ${GB(sizes.reduce((a, b) => a + b, 0))} of weights together` : ""
+    return `Already loaded: ${others.map(m => `${modelSaid(m)} on ${m.engine}`).join(", ")}. ` +
+      `Starting here loads ${modelSaid(loads)} beside ${others.length === 1 ? "it" : "them"}${total}.`
+  }
+  $: loadsWarning = warnOf(alongside)
   // The choice of where it sends, said once beside the two columns' label:
   // the provider, the model, and where that model came from.
   $: sendsSaid = !ui.starter?.provider
@@ -185,7 +230,7 @@
   }
   const isCurrent = s => s.id === state.currentSessionId
   // Live beside the one on screen, with its own container: running, waiting
-  // at its gate, or idle. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+  // at its gate, or idle. See `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
   const behind = s => !!s.live && !s.live.current && !isCurrent(s)
   const liveWord = s => s.live.state === "running" ? "running"
     : s.live.state === "gate" ? "waiting for you"
@@ -304,6 +349,7 @@
     <p class="dim small" :if="profileNames.length && cannotContinue">
       Cannot continue: {{ cannotContinue }}.
     </p>
+    <p class="small warn loads" :if="profileNames.length && loadsWarning">{{ loadsWarning }}</p>
     <p class="dim small" :if="profileNames.length && busy">
       Cannot start one either: {{ busy }}.
     </p>
@@ -412,6 +458,7 @@
 </TabModal>
 
 <style scoped>
+  .loads { color: var(--luu-warn); }
   .panel { display: flex; flex-direction: column; gap: var(--luu-space-3); }
   .panel > p { margin: 0; }
   .fields { display: flex; flex-direction: column; gap: var(--luu-space-4); }

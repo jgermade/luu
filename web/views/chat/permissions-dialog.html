@@ -70,6 +70,8 @@
   // this call; *forbidden*: a list, the floor or a no for the session.
   const outcomeOf = call =>
     call.held ? { kind: "ask", word: "waiting for you" }
+    : call.verdict.allowed && call.grant === "project"
+      ? { kind: "ok", word: "granted for the project" }
     : call.verdict.allowed
       ? call.asked === true && call.grant !== "session"
         ? { kind: "ok", word: "granted once" }
@@ -164,6 +166,11 @@
     return { key: best.key, note: "" }
   }
   const whereOf = call => {
+    // Always in this project: the list it is on is in Settings → Policies,
+    // not in this session's answers.
+    if (call.grant === "project" && call.verdict) {
+      return { tab: "policies", key: null, note: `${targetOf(call) || "."} is allowed always in this project — Settings → Policies, *Always, by project*, takes it back.` }
+    }
     if (call.grant === "session" && call.verdict) {
       const at = answerFor(call)
       return { tab: call.verdict.allowed ? "granted" : "forbidden", key: at == null ? null : `answer:${at}`, note: "" }

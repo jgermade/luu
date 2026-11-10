@@ -24,7 +24,7 @@ export const workspace = $reactive({
   /// chosen under, and what the remembered folder is keyed by.
   serveRoot: "",
   /// The session's folder, relative to `serveRoot`: `""` is the root itself.
-  /// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+  /// See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
   folder: "",
   /// What the last folder choice could not do, said where it was made: a
   /// session with turns stays in its folder, and the next one starts in the
@@ -130,7 +130,7 @@ export function inside(path) {
 /// `serve` was started — is the folder a fresh session is moved into on a
 /// visit, and the one new sessions start in. Opens the picker when nothing was
 /// remembered and the session is at the root. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
 export async function loadRoot(settings) {
   following(settings)
   let remembered = null

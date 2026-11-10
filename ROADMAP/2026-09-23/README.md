@@ -121,7 +121,7 @@ is why it leads.
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
 | 13 | **A judge that is not the model under test** | needs a design argument | [`machines.md`](machines.md) P1 |
-| 14 | ~~**Concurrency** — `serve` runs one live session at a time~~. *Built 2026-10-30*, steps 1–4 of [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md): several live sessions, each with its own worker, container and folder. Never struck here until [`2026-11-08`](../2026-11-08/README.md) found it. What is left is step 5, the memory warning: row 73 there | needs a design argument | [`state-of-play`](../../RECORD/2026-09-09.state-of-play.completed.md) §Still open |
+| 14 | ~~**Concurrency** — `serve` runs one live session at a time~~. *Built 2026-10-30*, steps 1–4 of [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md): several live sessions, each with its own worker, container and folder. Never struck here until [`2026-11-08`](../2026-11-08/README.md) found it. What is left is step 5, the memory warning: row 73 there | needs a design argument | [`state-of-play`](../../RECORD/2026-09-09.state-of-play.completed.md) §Still open |
 | 16 | **Rotating and revoking an approval key**, and nothing signs a *recording* | waits on a fleet being more than the boxes in one room | [`signed-approvals`](../../RECORD/2026-09-04.signed-approvals.completed.md) §Still open |
 
 **Section E — what a session may do: policies and grants.** Added

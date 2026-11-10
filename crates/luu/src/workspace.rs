@@ -485,7 +485,7 @@ pub async fn git_status(base: &Path) -> Result<Option<BTreeMap<String, String>>,
     // ran. Where the base is a folder inside the repository — a session's
     // folder, or `serve` started below the top — they are made the base's,
     // and what is outside it is not this tree's to show. See
-    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    // `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     let prefix = git(base, &["rev-parse", "--show-prefix"])
         .await
         .map(|prefix| prefix.trim_end_matches('\n').to_string())

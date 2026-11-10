@@ -116,7 +116,17 @@ use crate::turn::{EndReason, TurnEvent};
 /// session* or *stop*, and [`ServerMessage::LimitExtended`] for the budget a
 /// yes left. New variants of both tagged enums, the rule 2 named. See
 /// `RECORD/2026-10-27.a-turn-asks-before-its-tool-limit-ends-it.completed.md`.
-pub const VERSION: u32 = 12;
+///
+/// **13 is a fold behind**: [`ServerMessage::Compacted`] when a selection
+/// folded the open job's oldest turns into one summary to keep the window —
+/// a thing that happened to the conversation, on the protocol for
+/// [`ServerMessage::Evicted`]'s reason. See
+/// `RECORD/2026-11-09.fold-behind.completed.md`.
+///
+/// **14 is a yes for the project**: [`GrantScope::Project`] on a step, and
+/// [`ClientMessage::AnswerCall`]'s `project`. A new variant of a tagged enum,
+/// the rule 2 named. See `RECORD/2026-11-09.always-in-this-project.completed.md`.
+pub const VERSION: u32 = 14;
 
 /// What a person answered when a turn had made every tool call its budget
 /// allows and the model asked for another.
@@ -140,6 +150,10 @@ pub enum GrantScope {
     Once,
     /// Every draft of this session, until it is taken back.
     Session,
+    /// Every draft of every session in this project's folder, until it is
+    /// taken back: written in luu's own config, never in the project's tree.
+    /// Protocol 14.
+    Project,
 }
 
 /// What a session's answer is about: a program `run_command` runs, or a path
@@ -306,6 +320,12 @@ pub enum ClientMessage {
         /// once, which is what every answer before protocol 10 meant.
         #[serde(default)]
         session: bool,
+        /// With `allow`: always in this project, written to luu's config for
+        /// the session's folder (protocol 14). Never a no: a lasting no is the
+        /// session's, and a project-wide one would be a list, which Settings
+        /// edits.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        project: bool,
     },
     /// The answer to a [`ServerMessage::LimitReached`]. `turn`, `step` and
     /// `index` name the call that found the budget spent, so an answer that
@@ -520,6 +540,18 @@ pub enum ServerMessage {
         /// `RECORD/2026-09-08.what-a-fold-writes-down.completed.md`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         replaced: Option<Replaced>,
+    },
+    /// What was folded behind to keep the window: these turns go out as one
+    /// summary of their evidence from now on. Before any eviction, and said for
+    /// the same reason one is.
+    Compacted {
+        turn: TurnId,
+        turns: Vec<TurnId>,
+        /// What those turns cost in the window before the fold.
+        tokens: u32,
+        /// What the summary that replaced them costs.
+        summary_tokens: u32,
+        counter: Counter,
     },
     /// What left the window, and stays out.
     Evicted {
@@ -823,6 +855,7 @@ impl ServerMessage {
             // The turn that cut, not the turns that left: this is a thing the
             // selection for `turn` did.
             | Self::Evicted { turn, .. }
+            | Self::Compacted { turn, .. }
             // And the turn that was grounded, which is the same shape: what
             // this turn was asked with.
             | Self::Grounded { turn, .. } => Some(*turn),

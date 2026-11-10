@@ -342,6 +342,13 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const live = page.locator(".chat .col-head .job-menu")
   await expect(live).toBeVisible()
   await live.locator("button.trigger").click()
+  // Inside a job, what holds its turns is the plan, not the floor: the menu
+  // says what was approved.
+  await expect(page.getByRole("menuitem", { name: /What it may do/ }).locator(".note"))
+    .toContainText("reads AGENTS.md")
+  // It asked for the network, and the session has none: not reached.
+  await expect(page.getByRole("menuitem", { name: /What it may do/ }).locator(".note"))
+    .not.toContainText("network")
   await page.getByRole("menuitem", { name: /Close & fold/ }).click()
   await expect(live).toBeHidden({ timeout: 15_000 })
   await expect(page.locator(".fold .summary").first()).toBeVisible()
@@ -1105,7 +1112,7 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
  * session with no turns yet moves into it and its sandbox's base is that
  * folder, rather than the page narrowing what it lists. See
  * `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md` and
- * `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+ * `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
  */
 test("the workspace can be narrowed to a subdirectory of where serve started", async ({ page }) => {
   const errors = []
@@ -1279,6 +1286,11 @@ async function gateOnWidePosture(page) {
   // title, and in the fold it becomes.
   await expect(live.locator("button.trigger")).toHaveText("draft")
   await live.locator("button.trigger").click()
+  // What the draft's turns may reach, with no gate up: the floor, in the same
+  // words the gate uses. Row 44 of `ROADMAP/2026-11-08`.
+  const reach = page.getByRole("menuitem", { name: /What it may do/ }).locator(".note")
+  await expect(reach).toContainText("reads ")
+  await expect(reach).toContainText("writes only to .tmp")
   // What each door does, under its name.
   await expect(page.getByRole("menuitem", { name: /Plan this/ }).locator(".note")).toHaveText("what was drafted, at the gate")
   await page.getByRole("menuitem", { name: /Plan this/ }).click()
@@ -1722,17 +1734,24 @@ test.describe("Settings on a phone", () => {
     const section = await sheet.locator('.section.on[data-section="models"]').boundingBox()
     expect(section.width).toBeGreaterThan(380)
 
-    // A short pull on the head springs back; a long one closes it.
+    // A short slow pull on the head springs back; a long one closes it.
+    //
+    // **Slow on purpose.** The sheet closes on a flick — its last move faster
+    // than 0.5 px/ms — and eight steps of 7.5 px with nothing between them
+    // are one whenever two land within 15 ms, which is the machine's speed and
+    // not the gesture: it failed in CI on PR 77 and once in seven runs here.
+    // 40 ms a step is ~0.19 px/ms, a drag and not a flick on any machine.
     const head = await sheet.locator(".modal-head").boundingBox()
-    const pull = async dy => {
+    const pull = async (dy, pause = 0) => {
       await page.mouse.move(head.x + head.width / 2, head.y + 12)
       await page.mouse.down()
       for (let step = 1; step <= 8; step++) {
         await page.mouse.move(head.x + head.width / 2, head.y + 12 + (dy * step) / 8)
+        if (pause) await page.waitForTimeout(pause)
       }
       await page.mouse.up()
     }
-    await pull(60)
+    await pull(60, 40)
     await expect(sheet).toBeVisible()
     await expect.poll(bottom, { timeout: 10_000 }).toBe(844)
     await pull(400)
@@ -1801,4 +1820,73 @@ test("a short desktop window is not a phone", async ({ page }) => {
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
   await expect(page.locator(".app")).not.toHaveAttribute("data-columns", "slides")
+})
+
+/**
+ * Row 45: a recording written before 2026-08-30 approved a job with no plan on
+ * `task_approved`. The page called a job with no plan a draft, so that job read
+ * as exploration nobody approved. Replayed from the page's own `?replay=`, with
+ * the file served by the test: there is no such recording on disk.
+ * See `RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md`.
+ */
+test("a job approved before the plan was on the line is not a draft", async ({ page }) => {
+  const lines = [
+    { channel: "header", format: 1, protocol: 1, backend: "mock", model: "mock" },
+    { channel: "protocol", at_ms: 0, message: {
+      type: "task_proposed", task: 1, objective: "an old job",
+      plan: { files: ["AGENTS.md"], commands: [] } } },
+    { channel: "protocol", at_ms: 1, message: { type: "task_approved", task: 1 } },
+  ]
+  await page.route("**/old-approval.jsonl", route => route.fulfill({
+    contentType: "application/x-ndjson",
+    body: lines.map(line => JSON.stringify(line)).join("\n") + "\n",
+  }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html?replay=old-approval.jsonl`)
+  await chooseFolder(page)
+
+  const live = page.locator(".chat .col-head .job-menu")
+  await expect(live).toBeVisible({ timeout: 15_000 })
+  await expect(live.locator("button.trigger")).toHaveText("plan")
+  await expect(live.locator("button.trigger")).toHaveAttribute("title", /^job 1 · an old job/)
+})
+
+/**
+ * Row 21: a full window folded behind is said in the chat, at the turn that
+ * folded, and the folded turns are marked — not struck through, because they
+ * are still in the prompt as a summary. Replayed from a recording the test
+ * serves. See `RECORD/2026-11-09.fold-behind.completed.md`.
+ */
+test("a fold behind is said at the turn that folded, and the folded turns are marked", async ({ page }) => {
+  const at = n => n * 10
+  const turn = (n, prompt) => [
+    { channel: "protocol", at_ms: at(n), message: { type: "turn_started", turn: n, prompt, job: 1 } },
+    { channel: "protocol", at_ms: at(n) + 1, message: { type: "token", turn: n, text: `answer ${n}` } },
+    { channel: "protocol", at_ms: at(n) + 2, message: { type: "ended", turn: n, reason: "stop" } },
+  ]
+  const lines = [
+    { channel: "header", format: 28, protocol: 13, backend: "mock", model: "mock" },
+    ...turn(1, "first question"),
+    ...turn(2, "second question"),
+    { channel: "protocol", at_ms: at(3), message: { type: "turn_started", turn: 3, prompt: "third question", job: 1 } },
+    { channel: "protocol", at_ms: at(3) + 1, message: {
+      type: "compacted", turn: 3, turns: [1, 2], tokens: 480, summary_tokens: 31,
+      counter: { kind: "approximate" } } },
+    { channel: "protocol", at_ms: at(3) + 2, message: { type: "token", turn: 3, text: "answer 3" } },
+    { channel: "protocol", at_ms: at(3) + 3, message: { type: "ended", turn: 3, reason: "stop" } },
+  ]
+  await page.route("**/folded.jsonl", route => route.fulfill({
+    contentType: "application/x-ndjson",
+    body: lines.map(line => JSON.stringify(line)).join("\n") + "\n",
+  }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html?replay=folded.jsonl`)
+  await chooseFolder(page)
+
+  const said = page.locator(".transcript .cut .folded")
+  await expect(said).toHaveText(/turns 1–2 compacted to keep the window:\s+480 → 31 tokens/, { timeout: 15_000 })
+  await expect(page.locator(".transcript article.user", { hasText: "third question" }).locator(".folded")).toHaveCount(1)
+  const marked = page.locator(".transcript .cut .cited", { hasText: "in the prompt as a summary since turn 3" })
+  await expect(marked).toHaveCount(4)
+  await expect(page.locator(".transcript article.evicted")).toHaveCount(0)
 })

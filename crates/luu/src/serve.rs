@@ -239,6 +239,16 @@ impl agent_core::agent::Asker for Watching {
                 agent_core::agent::Answer::Forbid => Some(false),
                 _ => None,
             };
+            // Always in this project: written to luu's config for this
+            // folder, where Settings lists it and a person takes it back. A
+            // write that fails is said on stderr and the yes still runs this
+            // call — it is a yes either way, and the next turn asks again.
+            if answer == agent_core::agent::Answer::Project
+                && let Some(grant) = crate::grants::grant_for(call, &self.base)
+                && let Err(error) = write_project_grant(&self.base, &grant, true).await
+            {
+                eprintln!("always in this project: not written: {error}");
+            }
             if let Some(allow) = lasting
                 && let Some(grant) = crate::grants::grant_for(call, &self.base)
             {
@@ -273,6 +283,41 @@ impl agent_core::agent::Asker for Watching {
             answer
         })
     }
+}
+
+/// What `[project."<folder>"]` allows always, for the session folder `base`.
+/// Read fresh when a turn begins: a grant taken back in Settings holds from
+/// the next turn. A file that will not load allows nothing more.
+async fn project_grants(
+    base: &std::path::Path,
+) -> std::collections::BTreeSet<agent_core::protocol::Grant> {
+    load_config()
+        .await
+        .ok()
+        .and_then(|(config, _)| config.projects().get(&base.display().to_string()).cloned())
+        .map(|grants| grants.grants())
+        .unwrap_or_default()
+}
+
+/// Writes one grant into `[project."<folder>"]`, or takes it out.
+async fn write_project_grant(
+    base: &std::path::Path,
+    grant: &agent_core::protocol::Grant,
+    allow: bool,
+) -> Result<(), String> {
+    let path = config_path()
+        .await
+        .ok_or("this machine has no state directory to write config.toml in")?;
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    write_config(
+        current.with_project_grant(&base.display().to_string(), grant, allow),
+        path,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 /// A prompt held between the proposal and the answer to it.
@@ -351,6 +396,7 @@ impl Destination {
                 repeat: budget.repeat,
                 prune: budget.prune,
                 results: budget.results,
+                fold: budget.fold,
                 ..self.settings.clone()
             },
             authority: self.authority.clone(),
@@ -408,7 +454,7 @@ impl Destination {
 /// One live session's state: what `App` held for *the* session until
 /// 2026-10-30, moved here whole so that several can live side by side. Step 1
 /// keeps exactly one, in [`App::live`]; see
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 struct LiveSession {
     /// The live session's destination. See [`Destination`].
     destination: RwLock<Arc<Destination>>,
@@ -502,7 +548,7 @@ impl LiveSession {
     /// `agency`: what a new session and a resume fill in, field by field, before
     /// it is made live beside the others. The record file, where `--record`
     /// named one, is the process's and shared. See
-    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    /// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     fn blank(
         destination: Arc<Destination>,
         agency: Arc<Agency>,
@@ -557,7 +603,7 @@ impl LiveSession {
 
 /// The live sessions, by id, and the one used most recently: what a route or
 /// a socket that names none means. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 struct Lives {
     map: std::collections::BTreeMap<String, Arc<LiveSession>>,
     /// The current one **per owner**: `None` is the only key where there are
@@ -659,7 +705,7 @@ struct App {
     map_fill: agent_core::repo_map::Fill,
     /// The directory `serve` was started in: what every session's folder is
     /// chosen under, and what the page's paths are relative to. See
-    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     root: PathBuf,
     /// Tokens of selected fragments per turn. 0 is off.
     select_tokens: u32,
@@ -833,6 +879,10 @@ pub struct Settings {
     repeat: agent_core::context::Repeat,
     prune: agent_core::context::Prune,
     results: agent_core::context::Results,
+    /// What the open job's oldest turns become before any is evicted. See
+    /// `agent_core::context::Fold`.
+    #[serde(default)]
+    fold: agent_core::context::Fold,
     /// What a draft or a plan this session opens is told about itself, the
     /// same reason `repeat`/`prune`/`results` are here: a fact a session may
     /// choose and nothing can read back is a fact the page can contradict.
@@ -861,7 +911,7 @@ pub struct Settings {
     #[serde(default)]
     root: String,
     /// This session's folder, relative to `root`: `""` is the root itself.
-    /// See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     #[serde(default)]
     folder: String,
     /// The other live sessions working in the same folder, by id: two agents
@@ -947,6 +997,7 @@ impl Settings {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            fold: budget.fold,
             counter,
             counter_warning,
             unconfigured: provider.unconfigured(),
@@ -1243,6 +1294,7 @@ impl App {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            fold: budget.fold,
             authority: authority.clone(),
             counter: counter_id.clone(),
             counter_warning,
@@ -1368,6 +1420,7 @@ impl App {
                     view.repeat = Some(budget.repeat);
                     view.prune = Some(budget.prune);
                     view.results = Some(budget.results);
+                    view.fold = Some(budget.fold);
                     view.tool_calls = provider
                         .tool_calls
                         .native()
@@ -1756,12 +1809,9 @@ impl Serving {
         // that luu's link. See `crate::link::relay`.
         // Where links come in (a server with users and `[server] ssh`), or
         // where they may go out (a luu with no users).
-        let relays = self.state.links.is_some() || self.state.users.is_none();
-        if relays
-            && let Err(error) =
-                crate::link::relay(self.state.links.clone(), self.state.peers.clone()).await
-        {
-            eprintln!("note: no providers from linked luus: {error:#}");
+        let relays = self.state.links().is_some() || self.state.users.is_none();
+        if relays {
+            start_relay(&self.state).await;
         }
         // The luus this one dials, answered with this router behind a peer's
         // gate. Never from a server with users: there, links come in.
@@ -1775,9 +1825,10 @@ impl Serving {
                 _ => None,
             };
             // And what the peers it lets in reach over their own channels.
-            if let Some(links) = &self.state.links {
-                links.serve_peers(self.router.clone(), token.clone());
-            }
+            self.state
+                .listener
+                .links
+                .serve_peers(self.router.clone(), token.clone());
             self.state.peers.start(self.router.clone(), token, &peers);
         }
         let engines = self.app.engines.clone();
@@ -1966,51 +2017,27 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     };
     // Links from other luus, by key, where `[server] ssh` says: a key on a
     // user's account on a server with users, a key a `[peer.*]` names on a
-    // luu without them. See `crate::link`.
+    // luu without them. See `crate::link`. The links themselves always exist,
+    // empty until something links; the SSH listener starts below when the
+    // file says, or later from Remote access (`start_links`).
     let loaded = load_config()
         .await
         .map(|(config, _)| config)
         .unwrap_or_default();
     let server_table = loaded.server();
-    let (links, link_info, link_port, keys) = match server_table.ssh.as_deref() {
-        None => (None, None, 0, None),
-        Some(ssh) => {
-            let dir = crate::config::dir().context("no state directory for the SSH host key")?;
-            let host = crate::link::host_key(&dir)?;
-            let links = Arc::new(crate::link::Links::default());
-            let (accepts, keys) = match &users {
-                Some(users) => (crate::link::Accepts::Users(users.clone()), None),
-                None => {
-                    let keys = Arc::new(crate::link::Keys::default());
-                    keys.set(loaded.peers());
-                    (crate::link::Accepts::Keys(keys.clone()), Some(keys))
-                }
-            };
-            let listening = crate::link::listen(ssh, host, accepts, links.clone()).await?;
-            let port = listening.address.port();
-            // What a linking luu dials: said, or the origin's host and this
-            // port, or — on a luu without either — the host its page was
-            // asked by, worked out per request (`get_link_info`).
-            let dialled = server_table.ssh_public.clone().or_else(|| {
-                origin
-                    .as_deref()
-                    .and_then(|origin| origin.split("://").nth(1))
-                    .and_then(|rest| rest.split([':', '/']).next())
-                    .map(|host| format!("{host}:{port}"))
-            });
-            eprintln!(
-                "links — ssh on {}, dialled as {}, key {}",
-                listening.address,
-                dialled.as_deref().unwrap_or("the page's own host"),
-                listening.fingerprint
-            );
-            let info = crate::link::LinkInfo {
-                ssh: dialled.unwrap_or_default(),
-                host_key: listening.host_key,
-            };
-            (Some(links), Some(info), port, keys)
-        }
-    };
+    let listener = Arc::new(Listener {
+        links: Arc::new(crate::link::Links::default()),
+        keys: match &users {
+            Some(_) => None,
+            None => {
+                let keys = Arc::new(crate::link::Keys::default());
+                keys.set(loaded.peers());
+                Some(keys)
+            }
+        },
+        on: std::sync::OnceLock::new(),
+        starting: tokio::sync::Mutex::new(()),
+    });
     let starts = crate::engines::for_run(&provider);
     let rebuild = crate::rebuild_for(&provider);
     let provider_named = provider.named;
@@ -2109,29 +2136,27 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             (Some(_), Some(origin)) => Some(Arc::new(crate::passkeys::Passkeys::new(origin)?)),
             _ => None,
         },
-        links,
-        link_info,
-        link_port,
-        keys,
+        listener,
         peers: Arc::default(),
     };
+    if let Some(ssh) = server_table.ssh.as_deref() {
+        start_links(&state, ssh, server_table.ssh_public.clone()).await?;
+    }
     if users.is_some() {
         shared_paths_said(&app).await;
     }
     // What a linked luu's own channels reach here: `/api/infer`, and nothing
     // else, as the key's user — no login, no page.
-    if let Some(links) = &state.links {
-        links.offer(
-            Router::new()
-                .route("/api/infer", get(get_infer))
-                .route("/api/infer/{name}/models", get(get_infer_models))
-                .route(
-                    "/api/infer/{name}/to/{*rest}",
-                    axum::routing::any(infer_pass),
-                )
-                .with_state(state.clone()),
-        );
-    }
+    state.listener.links.offer(
+        Router::new()
+            .route("/api/infer", get(get_infer))
+            .route("/api/infer/{name}/models", get(get_infer_models))
+            .route(
+                "/api/infer/{name}/to/{*rest}",
+                axum::routing::any(infer_pass),
+            )
+            .with_state(state.clone()),
+    );
     let guarded = Router::new()
         .route("/ws", get(protocol_socket))
         .route("/ws/trace", get(trace_socket))
@@ -2151,6 +2176,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/providers", get(get_providers).put(put_providers))
         .route("/api/tool-steps", axum::routing::put(put_tool_steps))
         .route("/api/policies", get(get_policies).put(put_policies))
+        .route("/api/grants/project", get(get_project_grants))
+        .route("/api/grants/project/remove", post(remove_project_grant))
         .route("/api/providers.json", get(get_providers))
         .route("/api/providers/probe", post(probe_provider))
         .route("/api/providers/where", get(provider_where))
@@ -2270,6 +2297,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engine", get(live_engine))
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/port", get(free_engine_port))
+        .route("/api/engines/beside", get(engines_beside))
         .route("/api/engines/{name}/uninstall", post(uninstall_engine))
         .route("/api/engines/{name}/rename", post(rename_engine))
         .route("/api/engines/{name}/chat", post(chat_engine))
@@ -2279,7 +2307,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // Other machines' `luu serve`, reached through this one: the list, and
         // everything a page served under `/h/<name>/` asks of its API. See
         // `crate::hosts`, and [`hosts_allowed`] for who may.
-        .route("/api/hosts", get(get_hosts).put(put_hosts))
+        .route("/api/hosts", get(get_hosts))
         // Links, by key. A user's keys, on a server with users; the luus this
         // one dials, on this machine. See `crate::link`.
         .route("/api/auth/keys", get(get_keys).post(post_key))
@@ -2303,6 +2331,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         )
         .route("/api/peers", get(get_peers).put(put_peers))
         .route("/api/peers/probe", post(post_peer_probe))
+        .route("/api/peers/listen", post(post_peers_listen))
         // The providers this luu offers a linked one, by name, the key and
         // the engine staying here. A peer reaches them with `sessions`; a
         // linked luu's own channels reach nothing else. See `crate::link`.
@@ -2385,16 +2414,105 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     })
 }
 
-#[derive(Clone)]
-struct AppRouterState {
-    /// The luus linked to this one, on a server with users and `[server] ssh`.
-    links: Option<Arc<crate::link::Links>>,
-    /// Where they dial, and the key they pin: `/api/link.json`.
-    link_info: Option<crate::link::LinkInfo>,
-    /// The port links come to, for an address worked out from a request.
-    link_port: u16,
+/// Links from other luus, and the SSH listener they come in on.
+///
+/// The links always exist, empty until a luu links; the listener is the part
+/// that can be missing, and once started it stays for the life of `serve`.
+/// It used to be decided once, when `serve` started, and Remote access said
+/// *restart `luu serve`* — row 72(a). See
+/// `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+struct Listener {
+    links: Arc<crate::link::Links>,
     /// On a luu without users, the keys its `[peer.*]` let in.
     keys: Option<Arc<crate::link::Keys>>,
+    /// Where links are dialled and the key they pin (`/api/link.json`), and
+    /// the port they come to — set once, when the listener starts.
+    on: std::sync::OnceLock<(crate::link::LinkInfo, u16)>,
+    /// One start at a time: two clicks must not bind twice.
+    starting: tokio::sync::Mutex<()>,
+}
+
+impl AppRouterState {
+    /// The luus linked to this one — `None` while this luu takes no links,
+    /// as the field this replaced was.
+    fn links(&self) -> Option<&Arc<crate::link::Links>> {
+        self.listener.on.get().map(|_| &self.listener.links)
+    }
+
+    fn link_info(&self) -> Option<&crate::link::LinkInfo> {
+        self.listener.on.get().map(|(info, _)| info)
+    }
+
+    fn link_port(&self) -> u16 {
+        self.listener.on.get().map_or(0, |(_, port)| *port)
+    }
+
+    fn keys(&self) -> Option<&Arc<crate::link::Keys>> {
+        self.listener.keys.as_ref()
+    }
+}
+
+/// Starts the SSH listener on `ssh`, unless one already is. At `serve`'s start
+/// when `[server] ssh` says, and from Remote access without a restart.
+async fn start_links(state: &AppRouterState, ssh: &str, ssh_public: Option<String>) -> Result<()> {
+    let _one = state.listener.starting.lock().await;
+    if state.listener.on.get().is_some() {
+        return Ok(());
+    }
+    let dir = crate::config::dir().context("no state directory for the SSH host key")?;
+    let host = crate::link::host_key(&dir)?;
+    let accepts = match (&state.users, state.keys()) {
+        (Some(users), _) => crate::link::Accepts::Users(users.clone()),
+        (None, Some(keys)) => crate::link::Accepts::Keys(keys.clone()),
+        (None, None) => anyhow::bail!("a luu without users has its peers' keys"),
+    };
+    let listening = crate::link::listen(ssh, host, accepts, state.listener.links.clone()).await?;
+    let port = listening.address.port();
+    // What a linking luu dials: said, or the origin's host and this port, or —
+    // on a luu without either — the host its page was asked by, worked out per
+    // request (`get_link_info`).
+    let dialled = ssh_public.or_else(|| {
+        state
+            .origin
+            .as_deref()
+            .and_then(|origin| origin.split("://").nth(1))
+            .and_then(|rest| rest.split([':', '/']).next())
+            .map(|host| format!("{host}:{port}"))
+    });
+    eprintln!(
+        "links — ssh on {}, dialled as {}, key {}",
+        listening.address,
+        dialled.as_deref().unwrap_or("the page's own host"),
+        listening.fingerprint
+    );
+    let info = crate::link::LinkInfo {
+        ssh: dialled.unwrap_or_default(),
+        host_key: listening.host_key,
+    };
+    let _ = state.listener.on.set((info, port));
+    Ok(())
+}
+
+/// The socket a backend dials for a provider another luu offers. Once per
+/// process: at `serve`'s run where links may come or go, or when a server with
+/// users starts taking links later.
+async fn start_relay(state: &AppRouterState) {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    if let Err(error) =
+        crate::link::relay(Some(state.listener.links.clone()), state.peers.clone()).await
+    {
+        eprintln!("note: no providers from linked luus: {error:#}");
+    }
+}
+
+#[derive(Clone)]
+struct AppRouterState {
+    /// Links from other luus, and the SSH listener they come in on once one
+    /// is started. Read through [`AppRouterState::links`] and its neighbours.
+    listener: Arc<Listener>,
     /// The luus this one dials, and how each is doing.
     peers: Arc<crate::link::Peers>,
     app: Arc<App>,
@@ -3276,7 +3394,7 @@ fn sees_stored(who: &Option<Who>, owner: &Option<String>) -> bool {
 /// than the current one — one parameter, the same one `/ws` takes, rather than
 /// every route written twice. A session that is not live is a 404. A host's
 /// routes (`/h/<name>/…`) are that host's to answer, and pass through. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §2.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §2.
 ///
 /// **And on a server with users, nobody reaches another user's session**: a
 /// session named in the path (`/api/sessions/<id>/…`) or by `?session=` that
@@ -4021,7 +4139,7 @@ static SOCKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 /// `/ws?session=<id>`: which live session a socket speaks for. With none, it
 /// follows the current one. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
 #[derive(serde::Deserialize, Default)]
 struct SocketFor {
     session: Option<String>,
@@ -4326,12 +4444,16 @@ async fn handle_client_message(app: &Arc<App>, live: &Arc<LiveSession>, message:
             index,
             allow,
             session,
+            project,
         } => {
-            let answer = match (allow, session) {
-                (false, false) => agent_core::agent::Answer::Deny,
-                (false, true) => agent_core::agent::Answer::Forbid,
-                (true, false) => agent_core::agent::Answer::Once,
-                (true, true) => agent_core::agent::Answer::Session,
+            let answer = match (allow, session, project) {
+                (false, false, _) => agent_core::agent::Answer::Deny,
+                (false, true, _) => agent_core::agent::Answer::Forbid,
+                // Always in this project is a yes and only a yes: a lasting
+                // no is the session's, and a project-wide one is a list.
+                (true, _, true) => agent_core::agent::Answer::Project,
+                (true, false, false) => agent_core::agent::Answer::Once,
+                (true, true, false) => agent_core::agent::Answer::Session,
             };
             let index = index.unwrap_or(1);
             let held = {
@@ -4864,9 +4986,28 @@ async fn approve_plan(
                     counter.as_ref(),
                 );
                 debug_assert_eq!(approved.job, job, "the signature is bound to this id");
-                // The draft's own sandbox was never narrowed, so there is
-                // nothing to drop here — the narrowing below is the first one
-                // this pair of jobs has had.
+                // The job's own sandbox, from here until it closes — set
+                // under the lock the approval was made under, so no prompt can
+                // start a turn in the job before it is narrowed. A plan that
+                // names nothing narrows to nothing, which is the point: a turn
+                // inside a job may touch what the job was approved for. The
+                // draft's own sandbox was never narrowed, so there is nothing
+                // to drop: this is the first narrowing this pair of jobs has had.
+                session.narrowed = match plan.narrow(
+                    live.agency().await.gate_sandbox(&plan.commands).as_ref(),
+                    job,
+                ) {
+                    Ok(sandbox) => Some((job, Arc::new(sandbox))),
+                    // Only a path that stopped existing between the check and
+                    // here can do this. Falling back to the session's sandbox
+                    // would silently un-narrow the job, so the job runs with
+                    // nothing granted and the denials say which plan refused —
+                    // `turn_sandbox` is what makes `None` mean that.
+                    Err(error) => {
+                        eprintln!("job {job}: the approved plan could not be resolved: {error}");
+                        None
+                    }
+                };
                 Some((approved, pending.objective, plan, dropped))
             }
             // An approval for something that is no longer on the table, or a
@@ -4928,28 +5069,6 @@ async fn approve_plan(
             ),
         )
         .await;
-    }
-
-    // The job's own sandbox, from here until it closes. A plan that names
-    // nothing narrows to nothing, which is the point: a turn inside a job may
-    // touch what the job was approved for.
-    let narrowed = match plan.narrow(
-        live.agency().await.gate_sandbox(&plan.commands).as_ref(),
-        job,
-    ) {
-        Ok(sandbox) => Some(Arc::new(sandbox)),
-        // Only a path that stopped existing between the check and here can do
-        // this. Falling back to the session's sandbox would silently un-narrow
-        // the job, so the job runs with nothing granted and the denials say
-        // which plan refused.
-        Err(error) => {
-            eprintln!("job {job}: the approved plan could not be resolved: {error}");
-            None
-        }
-    };
-    {
-        let mut session = live.session.lock().await;
-        session.narrowed = narrowed.map(|sandbox| (job, sandbox));
     }
 
     app.publish(
@@ -5317,6 +5436,38 @@ fn floor_holding(session: &Session, agency: &crate::session::Agency) -> Arc<Sand
     }
 }
 
+/// What holds the turn about to be built: the **one** answer `begin_turn` (the
+/// selector, the authority note) and `start_turn` (the tools) both read.
+///
+/// - No live job, or a draft: the floor, through [`floor_holding`].
+/// - A live job with a plan, narrowed for it: that narrowing.
+/// - A live job with a plan and **no narrowing of its own**: nothing, under
+///   `Plan(job)`. A plan that stopped resolving (at the approval, a reopen or
+///   a resume) leaves `narrowed` at `None`, and the floor there would hold an
+///   approved job to the policy file rather than to what was approved.
+///
+/// The two sites used to decide separately, and differently. See
+/// `RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md`.
+fn turn_sandbox(session: &Session, agency: &crate::session::Agency) -> Arc<Sandbox> {
+    let planned = session.context.live_job().filter(|job| {
+        session
+            .context
+            .job(*job)
+            .is_some_and(|job| job.plan.is_some())
+    });
+    let Some(job) = planned else {
+        return floor_holding(session, agency);
+    };
+    match &session.narrowed {
+        Some((narrowed, sandbox)) if *narrowed == job => sandbox.clone(),
+        _ => Arc::new(
+            Plan::default()
+                .narrow(agency.sandbox.as_ref(), job)
+                .expect("a plan that names nothing has nothing to resolve"),
+        ),
+    }
+}
+
 async fn begin_turn(
     app: &Arc<App>,
     live: &Arc<LiveSession>,
@@ -5361,11 +5512,9 @@ async fn begin_turn(
         // than separately for the selector below and for the note this feeds:
         // two readings of one decision is how they drift, the same reasoning
         // the selector's own comment already gives for reading it through the
-        // live job rather than the policy file.
-        let sandbox = match &session.narrowed {
-            Some((_, sandbox)) => sandbox.clone(),
-            None => floor_holding(&session, &agency),
-        };
+        // live job rather than the policy file. And the same function
+        // `start_turn` reads, for the same reason one step further out.
+        let sandbox = turn_sandbox(&session, &agency);
         // What this turn is told about that authority, if this machine or this
         // session set anything. `Authority::Policy` gets no table and
         // therefore no note — see `crate::provider::AuthorityNotes`.
@@ -5518,6 +5667,20 @@ async fn begin_turn(
     // Before the prompt it explains: this is what the turn no longer carries,
     // and a client reading in order should learn that the history was cut
     // before it is handed the prompt that was cut from.
+    // Before the eviction, in the order the selection did them.
+    if let Some(folded) = selection.folding.clone() {
+        app.publish(
+            live,
+            Event::Protocol(ServerMessage::Compacted {
+                turn,
+                turns: folded.turns,
+                tokens: folded.tokens,
+                summary_tokens: folded.summary_tokens,
+                counter: folded.counter,
+            }),
+        )
+        .await;
+    }
     if let Some(evicted) = selection.eviction.clone() {
         app.publish(
             live,
@@ -5667,12 +5830,11 @@ async fn start_turn(app: Arc<App>, live: Arc<LiveSession>, prompt: String) {
     // nobody having approved anything. The floor is that one expression
     // changed, and every site that sets `narrowed = None` means it without
     // being touched. See `RECORD/2026-09-21.the-drafts-floor.completed.md`.
+    // An approved job that lost its narrowing gets nothing, not the floor:
+    // see [`turn_sandbox`].
     let sandbox = {
         let session = live.session.lock().await;
-        match (session.context.live_task(), &session.narrowed) {
-            (Some(live), Some((task, sandbox))) if live == *task => sandbox.clone(),
-            _ => floor_holding(&session, &agency),
-        }
+        turn_sandbox(&session, &agency)
     };
     // What *allow once* runs a call under, when this turn may ask at all: only
     // a draft's, and only where an unsigned click is an approval this server
@@ -5682,14 +5844,15 @@ async fn start_turn(app: Arc<App>, live: Arc<LiveSession>, prompt: String) {
     // And since 2026-10-23, a command the shell list leaves to a person, and
     // whatever a person already allowed for the session. See `crate::grants`.
     let wider = match sandbox.authority() {
-        Authority::Draft(draft) if !app.approvers.required => {
-            Some(crate::grants::DraftCeiling::new(
+        Authority::Draft(draft) if !app.approvers.required => Some(
+            crate::grants::DraftCeiling::new(
                 &agency.sandbox,
                 agency.environment(),
                 live.grants.clone(),
                 Authority::Person(*draft),
-            ))
-        }
+            )
+            .with_project(project_grants(agency.sandbox.base()).await),
+        ),
         _ => None,
     };
 
@@ -7601,9 +7764,10 @@ async fn put_default_runtime(
 
 /// Whether this request may reach a host, or write the list of them.
 ///
-/// [`engines_allowed`]'s rule, and for its reason: a host is reached with its
-/// token, which carries its approvals, its engines and its terminal. Off
-/// loopback, this server's token would hand all of that to whoever holds it.
+/// [`engines_allowed`]'s rule, and for its reason: a linked luu is reached
+/// with this machine's key, under what it lets this machine do — its
+/// sessions, maybe its terminal. Off loopback, this server's token would hand
+/// that to whoever holds it.
 /// And **an `Origin`, when one is sent, is this server**: a page on another
 /// site cannot read a cross-origin answer, but it can send a `POST`, and
 /// through here that would be a `POST` to the host.
@@ -7614,8 +7778,8 @@ fn hosts_allowed(
     let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
     if !state.providers_editable {
         return Err(refuse(
-            "this server is bound off loopback, and a host is reached with its own token. \
-             Reach it from a browser on this machine."
+            "this server is bound off loopback, and a linked luu is reached with this \
+             machine's key. Reach it from a browser on this machine."
                 .to_string(),
         ));
     }
@@ -7646,26 +7810,7 @@ fn hosts_allowed(
 /// A luu that linked to this one by a key a `[peer.*]` names, on a luu
 /// without users.
 fn accepted_link(state: &AppRouterState, name: &str) -> Option<crate::link::Linked> {
-    state.links.as_ref()?.get("_", name)
-}
-
-/// One `[host.<name>]`, or the answer that says it is not there.
-async fn host_named(name: &str) -> Result<crate::provider::Host, Box<Response>> {
-    let config = load_config()
-        .await
-        .map(|(config, _)| config)
-        .map_err(|error| {
-            Box::new((StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response())
-        })?;
-    config.hosts().get(name).cloned().ok_or_else(|| {
-        Box::new(
-            (
-                StatusCode::NOT_FOUND,
-                format!("there is no [host.{name}] in config.toml"),
-            )
-                .into_response(),
-        )
-    })
+    state.links()?.get("_", name)
 }
 
 /// What follows `/h/<name>` in the request, query included.
@@ -7681,29 +7826,11 @@ fn host_rest(uri: &Uri, name: &str) -> String {
     }
 }
 
-#[derive(serde::Serialize)]
-struct HostsView {
-    hosts: std::collections::BTreeMap<String, crate::provider::Host>,
-    /// Whether this server may reach or write them; see [`hosts_allowed`].
-    editable: bool,
-    /// The file they are in, or would be written to.
-    path: Option<String>,
-}
-
-async fn hosts_view(state: &AppRouterState) -> Result<HostsView, crate::provider::ConfigError> {
-    let (config, loaded) = load_config().await?;
-    Ok(HostsView {
-        hosts: config.hosts().clone(),
-        editable: state.providers_editable,
-        path: shown_path(loaded).await,
-    })
-}
-
 async fn get_hosts(State(state): State<AppRouterState>) -> Response {
     // On a server with users, a user's hosts are the luus they linked, and
-    // nobody else's: `[host.*]` is the machine's, with its token paths.
+    // nobody else's.
     if state.users.is_some() {
-        let mine = match (&state.links, owner_key()) {
+        let mine = match (state.links(), owner_key()) {
             (Some(links), Some(user)) => links.of(&user),
             _ => Vec::new(),
         };
@@ -7723,21 +7850,18 @@ async fn get_hosts(State(state): State<AppRouterState>) -> Response {
         return Json(serde_json::json!({ "hosts": hosts, "editable": false, "path": null }))
             .into_response();
     }
-    match hosts_view(&state).await {
-        Ok(view) => {
-            let mut view = serde_json::to_value(view).unwrap_or_default();
-            if let Some(hosts) = view
-                .get_mut("hosts")
-                .and_then(|hosts| hosts.as_object_mut())
-            {
-                for (name, entry) in linked_hosts(&state).await {
-                    hosts.insert(name, entry);
-                }
-            }
-            Json(view).into_response()
-        }
-        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
-    }
+    // The luus linked by key, which are every other luu this page can open
+    // since `[host.*]` was removed. Read only: a link is made in Remote access.
+    let hosts: serde_json::Map<String, serde_json::Value> =
+        linked_hosts(&state).await.into_iter().collect();
+    // `editable` is whether this page may go and make one: Remote access is
+    // this machine's to write, as the hosts it replaced were.
+    Json(serde_json::json!({
+        "hosts": hosts,
+        "editable": state.providers_editable,
+        "path": null,
+    }))
+    .into_response()
 }
 
 /// The luus linked by key that this page can open, as the project modal
@@ -7761,7 +7885,7 @@ async fn linked_hosts(state: &AppRouterState) -> Vec<(String, serde_json::Value)
             ));
         }
     }
-    if let Some(links) = &state.links {
+    if let Some(links) = state.links() {
         for accepted in links.of("_") {
             linked.push((
                 accepted.name.clone(),
@@ -7776,38 +7900,6 @@ async fn linked_hosts(state: &AppRouterState) -> Vec<(String, serde_json::Value)
     linked
 }
 
-#[derive(serde::Deserialize)]
-struct HostsEdit {
-    hosts: std::collections::BTreeMap<String, crate::provider::Host>,
-}
-
-/// Replaces every `[host.*]`, and nothing else in the file.
-async fn put_hosts(
-    State(state): State<AppRouterState>,
-    headers: axum::http::HeaderMap,
-    Json(edit): Json<HostsEdit>,
-) -> Response {
-    if let Err(refused) = hosts_allowed(&state, &headers) {
-        return *refused;
-    }
-    let Some(path) = config_path().await else {
-        return (
-            StatusCode::CONFLICT,
-            "this machine has no state directory yet, so there is nowhere to write config.toml. \
-             Run luu once on a terminal, or set LUU_HOME.",
-        )
-            .into_response();
-    };
-    let current = load_config()
-        .await
-        .map(|(config, _)| config)
-        .unwrap_or_default();
-    if let Err(error) = write_config(current.with_hosts(edit.hosts), path).await {
-        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
-    }
-    get_hosts(State(state)).await
-}
-
 /// A request the page made of a host's API, forwarded.
 /// A user's linked luu by name, on a server with links: theirs, or a 404
 /// that reads the same as one that does not exist.
@@ -7815,7 +7907,7 @@ fn linked_named(
     state: &AppRouterState,
     name: &str,
 ) -> Option<Result<crate::link::Linked, Box<Response>>> {
-    let links = state.links.as_ref()?;
+    let links = state.links()?;
     let found = owner_key().and_then(|user| links.get(&user, name));
     Some(found.ok_or_else(|| {
         Box::new(
@@ -7863,13 +7955,16 @@ async fn host_api(
         let (parts, body) = request.into_parts();
         return crate::link::forward(&linked, parts.method, &rest, &parts.headers, body).await;
     }
-    let host = match host_named(&name).await {
-        Ok(host) => host,
-        Err(refused) => return *refused,
-    };
-    let rest = host_rest(request.uri(), &name);
-    let (parts, body) = request.into_parts();
-    crate::hosts::forward(&name, &host, parts.method, &rest, &parts.headers, body).await
+    no_link(&name)
+}
+
+/// A name no link answers to: the 404 every other way in gives.
+fn no_link(name: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        format!("no luu named {name} is linked now"),
+    )
+        .into_response()
 }
 
 /// A socket the page opened on a host, forwarded. **Same-origin only**, as
@@ -7935,19 +8030,7 @@ async fn host_socket(
             tracing::info!(target: "luu::ws", linked = name, "closed");
         });
     }
-    let host = match host_named(&name).await {
-        Ok(host) => host,
-        Err(refused) => return *refused,
-    };
-    let upstream = match crate::hosts::connect(&name, &host, &host_rest(&uri, &name)).await {
-        Ok(upstream) => upstream,
-        Err(refused) => return *refused,
-    };
-    ws.on_upgrade(move |socket| async move {
-        tracing::info!(target: "luu::ws", host = name, "forwarding");
-        crate::hosts::pipe(socket, upstream).await;
-        tracing::info!(target: "luu::ws", host = name, "closed");
-    })
+    no_link(&name)
 }
 
 /// `/h/<name>` without its slash: every relative URL on the page would
@@ -7980,7 +8063,7 @@ async fn get_link_info(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let Some(info) = &state.link_info else {
+    let Some(info) = state.link_info() else {
         return (StatusCode::NOT_FOUND, "this server accepts no links").into_response();
     };
     let mut info = info.clone();
@@ -7998,7 +8081,7 @@ async fn get_link_info(
                 .map_or(host, |(name, _)| name)
                 .to_string(),
         };
-        info.ssh = format!("{name}:{}", state.link_port);
+        info.ssh = format!("{name}:{}", state.link_port());
     }
     Json(info).into_response()
 }
@@ -8022,8 +8105,7 @@ async fn get_keys(State(state): State<AppRouterState>) -> Response {
         Err(refused) => return *refused,
     };
     let links = state
-        .links
-        .as_ref()
+        .links()
         .map(|links| links.of(&user))
         .unwrap_or_default();
     match users.keys_of(&user) {
@@ -8034,7 +8116,7 @@ async fn get_keys(State(state): State<AppRouterState>) -> Response {
                 "key": linked.key,
                 "since": linked.since,
             })).collect::<Vec<_>>(),
-            "accepts": state.link_info.is_some(),
+            "accepts": state.link_info().is_some(),
         }))
         .into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -8451,9 +8533,9 @@ async fn peers_view(state: &AppRouterState) -> Response {
         false => state.peers.identity().ok(),
     };
     // Links this luu accepts: where, with which key, and who is linked in now.
-    let listening = state.link_info.as_ref().map(|info| {
+    let listening = state.link_info().map(|info| {
         serde_json::json!({
-            "port": state.link_port,
+            "port": state.link_port(),
             "host_key": info.host_key,
             "fingerprint": crate::link::parse_public(&info.host_key)
                 .map(|key| crate::link::fingerprint(&key))
@@ -8461,8 +8543,8 @@ async fn peers_view(state: &AppRouterState) -> Response {
         })
     });
     let accepted: serde_json::Map<String, serde_json::Value> = state
-        .links
-        .iter()
+        .links()
+        .into_iter()
         .flat_map(|links| links.of("_"))
         .map(|linked| {
             (
@@ -8516,8 +8598,75 @@ async fn put_peers(State(state): State<AppRouterState>, Json(edit): Json<PeersEd
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     state.peers.restart(&edit.peers);
-    if let Some(keys) = &state.keys {
+    if let Some(keys) = state.keys() {
         keys.set(&edit.peers);
+    }
+    peers_view(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct ListenAsk {
+    /// Where to take links, as `[server] ssh` says it: `0.0.0.0:2222`.
+    ssh: String,
+}
+
+/// Starts taking links on `ssh` now, and writes `[server] ssh` so the next
+/// `serve` does too. Started first: an address that cannot be bound is said
+/// and nothing is written. A luu already listening keeps its port — moving it
+/// would drop every luu linked in — and says so. Row 72(a).
+async fn post_peers_listen(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<ListenAsk>,
+) -> Response {
+    if let Err(refused) = peers_allowed(&state) {
+        return *refused;
+    }
+    let ssh = asked.ssh.trim().to_string();
+    if ssh.parse::<std::net::SocketAddr>().is_err() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{ssh} is not an address and port, such as 0.0.0.0:2222"),
+        )
+            .into_response();
+    }
+    if state.link_info().is_some() {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "this luu already takes links on port {}: a new one is read when luu serve starts",
+                state.link_port()
+            ),
+        )
+            .into_response();
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory to write config.toml in",
+        )
+            .into_response();
+    };
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let server = current.server().clone();
+    if let Err(error) = start_links(&state, &ssh, server.ssh_public.clone()).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")).into_response();
+    }
+    if state.users.is_some() {
+        start_relay(&state).await;
+    }
+    let server = crate::provider::Server {
+        ssh: Some(ssh),
+        ..server
+    };
+    if let Err(error) = write_config(current.with_server(server), path).await {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("taking links now, but config.toml was not written: {error}"),
+        )
+            .into_response();
     }
     peers_view(&state).await
 }
@@ -8579,6 +8728,118 @@ struct Offered {
 
 /// Whether `name` is offered: a profile, not withheld with `offer = false`,
 /// and not one whose engine is switched off.
+#[derive(serde::Deserialize)]
+struct BesideAsk {
+    provider: String,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// One engine and the model it holds, or would.
+#[derive(serde::Serialize, Debug, PartialEq)]
+struct EngineModel {
+    engine: String,
+    /// The reference it loads; `None` for an engine started on its own
+    /// table's model, or for Ollama, which serves every model it has.
+    model: Option<String>,
+    /// `name (source)`, as the pickers say it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    /// The weights on disk, in bytes: what loading it puts in memory, give or
+    /// take the context. `None` where the file is not one this machine lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    /// Live sessions sending to this engine. Zero for `loads`.
+    sessions: usize,
+}
+
+/// What a new session on `provider`/`model` would load, and what this server's
+/// engines already hold — asked by the new session's dialog before the click,
+/// so a second local model is a decision and not a surprise. Sizes are the
+/// weights' files, not a measurement of the process: an engine's resident
+/// memory depends on the platform and the card, and the file is the number a
+/// person can compare. See `RECORD/2026-11-09.a-second-local-model-warned.completed.md`.
+async fn engines_beside(
+    State(state): State<AppRouterState>,
+    Query(ask): Query<BesideAsk>,
+) -> Response {
+    let (config, path) = match load_config().await {
+        Ok(loaded) => loaded,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    if !is_offered(&config, &ask.provider) {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("no provider named {} is offered here", ask.provider),
+        )
+            .into_response();
+    }
+    let model = ask.model.as_deref().filter(|m| !m.trim().is_empty());
+    let resolved = match crate::provider::resolve(
+        &config,
+        path.as_deref(),
+        crate::provider::Flags {
+            provider: Some(&ask.provider),
+            model,
+            ..Default::default()
+        },
+    ) {
+        Ok(resolved) => resolved,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let loads = crate::engines::for_run(&resolved).map(|(name, engine)| (name, engine.model));
+
+    // Who sends where, by the engine of each live session's profile.
+    let mut sending: std::collections::BTreeMap<String, usize> = Default::default();
+    for (_, live) in state.app.all_live() {
+        let profile = live.destination().await.settings.profile.clone();
+        if let Some(engine) =
+            profile.and_then(|profile| config.profiles().get(&profile)?.engine.clone())
+        {
+            *sending.entry(engine).or_default() += 1;
+        }
+    }
+    let mut loaded = Vec::new();
+    for name in config.engines().keys() {
+        if let Some(model) = state.app.engines.model_of(name).await {
+            loaded.push((name.clone(), model));
+        }
+    }
+
+    // One walk of the catalog for every reference, off the async threads.
+    let described = tokio::task::spawn_blocking(move || {
+        let catalog = crate::models::catalog();
+        let describe = |engine: String, model: Option<String>, sessions: usize| {
+            let found = model
+                .as_deref()
+                .and_then(|m| catalog.iter().find(|local| local.reference == m));
+            EngineModel {
+                label: model.as_deref().map(crate::models::label),
+                size: found.map(|local| local.size).filter(|size| *size > 0),
+                engine,
+                model,
+                sessions,
+            }
+        };
+        let loads = loads.map(|(engine, model)| describe(engine, model, 0));
+        let loaded: Vec<EngineModel> = loaded
+            .into_iter()
+            .map(|(engine, model)| {
+                let sessions = sending.get(&engine).copied().unwrap_or(0);
+                describe(engine, model, sessions)
+            })
+            .collect();
+        (loads, loaded)
+    })
+    .await;
+    match described {
+        Ok((loads, loaded)) => {
+            Json(serde_json::json!({ "loads": loads, "loaded": loaded })).into_response()
+        }
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
 fn is_offered(config: &crate::provider::Config, name: &str) -> bool {
     let Some(profile) = config.profiles().get(name) else {
         return false;
@@ -8672,11 +8933,21 @@ async fn infer_pass(
         )
             .into_response();
     }
+    // Read whole before anything is sent: the model it names is what an engine
+    // is started on, the way a local session's choice moves one. A model call
+    // is JSON and far under the cap.
+    let (parts, body) = request.into_parts();
+    let body = match axum::body::to_bytes(body, INFER_BODY_LIMIT).await {
+        Ok(body) => body,
+        Err(error) => return (StatusCode::PAYLOAD_TOO_LARGE, error.to_string()).into_response(),
+    };
+    let named = engine_model_named(&config, &name, &body);
     let resolved = match crate::provider::resolve(
         &config,
         path.as_deref(),
         crate::provider::Flags {
             provider: Some(&name),
+            model: named.as_deref(),
             ..Default::default()
         },
     ) {
@@ -8703,13 +8974,12 @@ async fn infer_pass(
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response();
         }
     };
-    let query = request
-        .uri()
+    let query = parts
+        .uri
         .query()
         .map(|query| format!("?{query}"))
         .unwrap_or_default();
     let target = format!("{}/{rest}{query}", url.trim_end_matches('/'));
-    let (parts, body) = request.into_parts();
     let mut asked = infer_client().request(parts.method, target);
     for (header_name, value) in &parts.headers {
         if !crate::hosts::NOT_FORWARDED.contains(header_name) && header_name.as_str() != "x-api-key"
@@ -8723,7 +8993,7 @@ async fn infer_pass(
             _ => asked.bearer_auth(key),
         };
     }
-    asked = asked.body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    asked = asked.body(body);
     let answer = match asked.send().await {
         Ok(answer) => answer,
         Err(error) => {
@@ -8741,6 +9011,33 @@ async fn infer_pass(
         .unwrap_or_else(|error| (StatusCode::BAD_GATEWAY, error.to_string()).into_response())
 }
 
+/// The most a linked request's body may be: a model call with a long history
+/// is a few megabytes of JSON.
+const INFER_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// The model a linked request names, when the provider's engine may be moved
+/// onto it: a reference into this machine's catalog for llama.cpp and mlx, a
+/// Strata id for Strata, and one the profile has not switched off. Anything
+/// else is `None`, and the engine stays on the table's model — the request
+/// still goes through, as it did before. Row 72(b); see
+/// `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+fn engine_model_named(
+    config: &crate::provider::Config,
+    provider: &str,
+    body: &[u8],
+) -> Option<String> {
+    let profile = config.profiles().get(provider)?;
+    let engine = config.engines().get(profile.engine.as_deref()?)?;
+    let asked: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let model = asked.get("model")?.as_str()?.trim();
+    let fits = match engine.kind {
+        crate::provider::EngineKind::Strata => strata_id(model),
+        crate::provider::EngineKind::Ollama => false,
+        _ => crate::models::is_reference(model),
+    };
+    (fits && profile.offers(model)).then(|| model.to_string())
+}
+
 /// The providers linked luus offer this person, by `<provider>@<peer>`: the
 /// peers this luu dials that are connected, or, on a server with users, the
 /// luus their keys linked. Asked of each at once, a slow one cut at 3 s.
@@ -8748,7 +9045,7 @@ async fn linked_offers(
     state: &AppRouterState,
 ) -> std::collections::BTreeMap<String, serde_json::Value> {
     let owner = owner_key();
-    let peers: Vec<String> = match (&state.links, &owner) {
+    let peers: Vec<String> = match (state.links(), &owner) {
         (Some(links), Some(user)) => links
             .of(user)
             .into_iter()
@@ -8762,8 +9059,8 @@ async fn linked_offers(
             .map(|(name, _)| name)
             .chain(
                 state
-                    .links
-                    .iter()
+                    .links()
+                    .into_iter()
                     .flat_map(|links| links.of("_"))
                     .map(|linked| linked.name),
             )
@@ -10542,6 +10839,57 @@ async fn get_policies(State(state): State<AppRouterState>) -> Response {
 /// The environments are resolved again from what was written, so the next
 /// session on one runs under the lists as they are now; the live session
 /// keeps the agency it was built with.
+/// What was allowed always, by project folder, and whether this page may take
+/// one back — the policies' own rule, since a grant is a policy a person wrote
+/// by answering.
+async fn get_project_grants(State(state): State<AppRouterState>) -> Response {
+    let projects = load_config()
+        .await
+        .map(|(config, _)| config.projects().clone())
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "projects": projects,
+        "editable": may_write(&state, Role::Admin),
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectGrantRemoval {
+    folder: String,
+    kind: agent_core::protocol::GrantKind,
+    target: String,
+}
+
+/// Takes one *always in this project* back: the next call it covered in that
+/// folder is asked again.
+async fn remove_project_grant(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<ProjectGrantRemoval>,
+) -> Response {
+    if !may_write(&state, Role::Admin) {
+        return (
+            StatusCode::FORBIDDEN,
+            refusal(
+                &state,
+                Role::Admin,
+                "a project's grants are read-only on a server bound off loopback",
+            ),
+        )
+            .into_response();
+    }
+    let grant = agent_core::protocol::Grant {
+        kind: asked.kind,
+        target: asked.target,
+    };
+    if let Err(error) =
+        write_project_grant(std::path::Path::new(&asked.folder), &grant, false).await
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    get_project_grants(State(state)).await
+}
+
 async fn put_policies(
     State(state): State<AppRouterState>,
     Json(edit): Json<PoliciesTables>,
@@ -10801,7 +11149,7 @@ fn learn_window(app: Arc<App>, live: Arc<LiveSession>) {
 /// send to — so a session that moved elsewhere does not leave a model loaded
 /// in memory until `serve` exits, and one beside it keeps the model it uses.
 /// See [`crate::engines::Supervisor::stop_others`] and
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §4.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §4.
 async fn release_engines(app: &App, profile: Option<&str>) {
     let config = load_config().await.ok().map(|(config, _)| config);
     let mut profiles: Vec<String> = profile.map(str::to_string).into_iter().collect();
@@ -10881,6 +11229,7 @@ struct RunningResend {
     repeat: agent_core::context::Repeat,
     prune: agent_core::context::Prune,
     results: agent_core::context::Results,
+    fold: agent_core::context::Fold,
 }
 
 impl RunningResend {
@@ -10889,6 +11238,7 @@ impl RunningResend {
             repeat: budget.repeat,
             prune: budget.prune,
             results: budget.results,
+            fold: budget.fold,
         }
     }
 }
@@ -10994,6 +11344,24 @@ fn resend_live(asked: crate::provider::Resend, live: Budget) -> (Budget, Vec<Str
             }
             other => other.unwrap_or(live.results),
         },
+        // Prune's rule, for prune's reason: the fold-behind line is a
+        // ratchet, so turning it off now stops it moving and gives back
+        // nothing already folded — a control that would report a change it
+        // did not make. On moves live; off waits.
+        fold: match asked.fold {
+            Some(agent_core::context::Fold::Never)
+                if live.fold == agent_core::context::Fold::Behind =>
+            {
+                waiting.push(
+                    "fold: the fold-behind line is a ratchet, so turning it off now would \
+                     unfold nothing already behind it. The file says never; this session keeps \
+                     folding until the next one starts."
+                        .to_string(),
+                );
+                live.fold
+            }
+            other => other.unwrap_or(live.fold),
+        },
         ..live
     };
     (budget, waiting)
@@ -11092,6 +11460,7 @@ async fn put_resend(
             view.repeat = Some(budget.repeat);
             view.prune = Some(budget.prune);
             view.results = Some(budget.results);
+            view.fold = Some(budget.fold);
         }
         // Written down now rather than at the next turn's checkpoint, for the
         // reason a resume is: a session moved and then left alone would lose
@@ -11294,7 +11663,7 @@ async fn list_sessions(State(state): State<AppRouterState>) -> Response {
     };
     // The current one first, as `live`, which is what the page has always
     // read the live row as; the others live beside it under their own ids
-    // (`RECORD/2026-10-30.sessions-side-by-side.WIP.md`).
+    // (`RECORD/2026-10-30.sessions-side-by-side.completed.md`).
     let (mut first, last, current_id) = row_of(&current).await;
     first.written_at = written(&current_id, last, first.started_at);
     if let Some(live) = first.live.as_mut() {
@@ -11362,6 +11731,8 @@ struct NewSession {
     prune: Option<agent_core::context::Prune>,
     #[serde(default)]
     results: Option<agent_core::context::Results>,
+    #[serde(default)]
+    fold: Option<agent_core::context::Fold>,
     /// What a draft or a plan this session opens is told about itself, each
     /// absent meaning *whatever this server is already under* — the same
     /// three-level precedence [`NewSession::resend`] gives `repeat`, `prune`
@@ -11383,7 +11754,7 @@ struct NewSession {
     lists: Option<ListsChoice>,
     /// The folder the session works in, relative to where `serve` was
     /// started: its sandbox's base. Absent, or `""`, is that directory itself.
-    /// Never above it. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+    /// Never above it. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
     #[serde(default)]
     folder: Option<String>,
 }
@@ -11430,6 +11801,7 @@ impl NewSession {
             repeat: self.repeat.or(machine.repeat).unwrap_or(budget.repeat),
             prune: self.prune.or(machine.prune).unwrap_or(budget.prune),
             results: self.results.or(machine.results).unwrap_or(budget.results),
+            fold: self.fold.or(machine.fold).unwrap_or(budget.fold),
             ..budget
         };
         (asked != budget).then_some(asked)
@@ -12022,6 +12394,10 @@ fn retarget_header(
                 Some(sending.budget.prune),
                 Some(sending.budget.results),
             )
+        // And the fold-behind rung, where absent is `never` — every stream
+        // before format 28 ran without it, so it is not a reason to write a
+        // header for each of them.
+        && view.fold.unwrap_or_default() == sending.budget.fold
         // A fifth term, `authority`'s own reason: a session whose notes moved
         // is a session rendering under something else, the same fact a rule
         // moving already is.
@@ -12243,7 +12619,7 @@ async fn new_session(
     let app = &state.app;
     // Beside the others, not in place of the current one: a turn running in
     // it goes on. Refused only when there is no room for one more. See
-    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    // `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     room_for_one(app).await?;
     // The session it is made beside, whose destination it starts from: the
     // asker's current one, or — for a user's first — the server's own.
@@ -12431,6 +12807,7 @@ async fn new_session(
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.fold = Some(sending.budget.fold);
         view.tool_calls = sending
             .tool_calls
             .native()
@@ -12631,7 +13008,7 @@ struct MoveFolder {
 /// made again over that tree — the same lists or posture, the same runtime —
 /// with its repository map and selection walk. After its first turn its
 /// history is about the tree it worked in, and another folder is another
-/// session. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §5.
+/// session. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
 async fn put_session_folder(
     State(state): State<AppRouterState>,
     Json(asked): Json<MoveFolder>,
@@ -12701,7 +13078,7 @@ async fn put_session_folder(
 /// ones that are. Where there is no room, the least recently used one that
 /// may sleep is put to sleep to make some; refused only when none may, with
 /// the ids of the live ones. See
-/// `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
+/// `RECORD/2026-10-30.sessions-side-by-side.completed.md` §3.
 async fn room_for_one(app: &App) -> Result<(), Box<Response>> {
     let max = load_config()
         .await
@@ -13065,6 +13442,7 @@ async fn settle_move(
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.fold = Some(sending.budget.fold);
         view.authority_draft = sending.authority.draft_note();
         view.authority_plan = sending.authority.plan_note();
         view.tool_calls = sending
@@ -13267,7 +13645,7 @@ async fn resume_session(
     // Already live — beside the current one, or asleep in nobody's way — is
     // attached to rather than resumed: it becomes the current one, as it is,
     // with whatever it is running. See
-    // `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    // `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     //
     // **Unless the body names somewhere else for it to send.** That is the
     // model picker's switch and the sessions dialog's *Continue here*, and
@@ -13659,6 +14037,7 @@ async fn resume_session(
             live_view.repeat = Some(sending.budget.repeat);
             live_view.prune = Some(sending.budget.prune);
             live_view.results = Some(sending.budget.results);
+            live_view.fold = Some(sending.budget.fold);
             live_view.authority_draft = sending.authority.draft_note();
             live_view.authority_plan = sending.authority.plan_note();
             live_view.tool_calls = sending
@@ -14093,6 +14472,7 @@ mod tests {
                         repeat: agent_core::context::Repeat::Once,
                         prune: agent_core::context::Prune::Never,
                         results: agent_core::context::Results::Kept,
+                        fold: agent_core::context::Fold::Never,
                         counter: agent_core::context::Counter::Approximate,
                         counter_warning: None,
                         select_tokens,
@@ -14217,6 +14597,7 @@ mod tests {
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.fold = Some(sending.budget.fold);
     }
 
     /// One destination, for the tests that only care that two of them differ.
@@ -14239,6 +14620,7 @@ mod tests {
                 repeat: agent_core::context::Repeat::Once,
                 prune: agent_core::context::Prune::Never,
                 results: agent_core::context::Results::Kept,
+                fold: agent_core::context::Fold::Never,
                 counter: agent_core::context::Counter::Approximate,
                 counter_warning: None,
                 select_tokens: 0,
@@ -14660,6 +15042,7 @@ mod tests {
             repeat,
             prune,
             results,
+            fold: None,
         };
 
         // Everything turned on: all three move, nothing waits. Turning a rule
@@ -15071,6 +15454,121 @@ mod tests {
         assert!(
             session.narrowed.as_ref().is_some_and(|(id, _)| *id == 2),
             "the sandbox narrows at the approval, and only there",
+        );
+    }
+
+    /// Row 72(b): what a linked request's `model` may move an engine onto.
+    #[test]
+    fn a_linked_request_names_the_model_its_engine_loads_and_nothing_else() {
+        let config = crate::provider::Config::from_toml(
+            "[engine.gemma]\nkind = \"llama\"\nmodel = \"luu:first.gguf\"\n\n\
+             [engine.st]\nkind = \"strata\"\n\n\
+             [engine.ol]\nkind = \"ollama\"\n\n\
+             [provider.gpu]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:8080/v1\"\n\
+             model = \"luu:first.gguf\"\nengine = \"gemma\"\n\n\
+             [provider.gpu.models.\"luu:off.gguf\"]\nenabled = false\n\n\
+             [provider.fast]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:8090/v1\"\n\
+             model = \"qwen-flash\"\nengine = \"st\"\n\n\
+             [provider.ol]\nbackend = \"ollama\"\nurl = \"http://127.0.0.1:11434\"\n\
+             model = \"qwen\"\nengine = \"ol\"\n\n\
+             [provider.api]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"x\"\n",
+            "/config.toml",
+        )
+        .unwrap();
+        let asks = |provider: &str, model: &str| {
+            engine_model_named(
+                &config,
+                provider,
+                serde_json::json!({ "model": model, "messages": [] })
+                    .to_string()
+                    .as_bytes(),
+            )
+        };
+        assert_eq!(
+            asks("gpu", "luu:second.gguf").as_deref(),
+            Some("luu:second.gguf")
+        );
+        assert_eq!(
+            asks("gpu", " luu:second.gguf ").as_deref(),
+            Some("luu:second.gguf")
+        );
+        assert_eq!(
+            asks("gpu", "gpt-4o"),
+            None,
+            "not a reference: the table's model"
+        );
+        assert_eq!(
+            asks("gpu", "luu:off.gguf"),
+            None,
+            "switched off on the profile"
+        );
+        assert_eq!(asks("fast", "ds-big").as_deref(), Some("ds-big"));
+        assert_eq!(asks("fast", "../etc"), None, "not a Strata id");
+        assert_eq!(
+            asks("ol", "luu:second.gguf"),
+            None,
+            "Ollama serves every model it has"
+        );
+        assert_eq!(asks("api", "luu:second.gguf"), None, "no engine to move");
+        assert_eq!(asks("nobody", "luu:second.gguf"), None);
+        assert_eq!(engine_model_named(&config, "gpu", b"not json"), None);
+    }
+
+    /// Row 43: what holds a turn is one decision, and an approved job that
+    /// lost its narrowing gets nothing rather than the floor.
+    ///
+    /// The floor is checked to read `Cargo.toml` first, or *denied* would prove
+    /// nothing. See `RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md`.
+    #[tokio::test]
+    async fn an_approved_job_without_its_narrowing_runs_on_nothing() {
+        let app = app(&[PLAN, "the answer"]);
+        let live = app.current();
+        on_prompt(app.clone(), live.clone(), "add a flag".into()).await;
+        assert!(until(&app, |s| s.pending.is_some()).await);
+        approve(&app).await;
+        assert!(until(&app, |s| s.context.jobs().len() == 2).await);
+
+        let agency = live.agency().await;
+        let cargo = std::path::Path::new("Cargo.toml");
+        let reads = |sandbox: &Sandbox| {
+            sandbox
+                .check_path(cargo, agent_core::sandbox::Access::Read)
+                .verdict
+                .allowed
+        };
+        assert!(
+            reads(agency.floor()),
+            "the floor reads it, so a denial means something"
+        );
+
+        let mut session = live.session.lock().await;
+        let (_, own) = session.narrowed.clone().expect("narrowed at the approval");
+        assert!(
+            Arc::ptr_eq(&turn_sandbox(&session, &agency), &own),
+            "narrowed for the live job: that narrowing",
+        );
+
+        // What a plan that stopped resolving leaves, and a narrowing that is
+        // some other job's. Neither has a path today; both must fail closed.
+        let stale = Arc::new(Plan::default().narrow(&agency.sandbox, 1).unwrap());
+        for narrowed in [None, Some((1, stale))] {
+            session.narrowed = narrowed;
+            let held = turn_sandbox(&session, &agency);
+            assert!(!reads(&held), "an approved job never falls to the floor");
+            assert!(
+                matches!(held.authority(), Authority::Plan(2)),
+                "and its refusals name the job: {:?}",
+                held.authority(),
+            );
+        }
+
+        // Closed, it is the floor again — whatever `narrowed` still says.
+        let counter = live.destination().await.counter.clone();
+        session.context.close_job(2, counter.as_ref()).unwrap();
+        session.narrowed = Some((2, own));
+        assert!(
+            reads(&turn_sandbox(&session, &agency)),
+            "no live job: the floor"
         );
     }
 

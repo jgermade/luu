@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
+import { createServer as createNetServer } from "node:net"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -313,6 +314,8 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await expect(running.locator("dd").nth(0)).toContainText("once")
   await expect(running.locator("dd").nth(1)).toContainText("never")
   await expect(running.locator("dd").nth(2)).toContainText("kept")
+  // And the fourth rung, off until it is measured (row 21).
+  await expect(running.locator("dd").nth(3)).toContainText("never")
 
   // The editor below it: this machine's default, which says nothing yet. Unset
   // is not off — it is the code's default, which for this rule is now `once`.
@@ -347,7 +350,9 @@ test("the resend rules are chosen from the page, and a save says what it did not
   expect(onDisk).toContain("[provider.here]")
 
   // Rule B on, which is clean: the prune line starts moving.
-  await editor.locator('button:has-text("behind")').click()
+  // The Prune control by its name: Fold has a "behind" too since 2026-11-09.
+  const prune = editor.getByRole("radiogroup", { name: "Prune" })
+  await prune.locator('button:has-text("behind")').click()
   await page.locator("#sessions-resend button.save").click()
   await expect(running.locator("dd").nth(1)).toContainText("behind")
 
@@ -355,7 +360,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // a ratchet, so the running session keeps pruning; the file says never, and
   // the page has to say both rather than reporting a change that did not
   // happen.
-  await editor.locator('button:has-text("never")').click()
+  await prune.locator('button:has-text("never")').click()
   await page.locator("#sessions-resend button.save").click()
 
   const waiting = page.locator("#sessions-resend .waiting")
@@ -2380,5 +2385,39 @@ test("a Strata engine lists what Strata installed and starts on one", async ({ p
   } finally {
     writeFileSync(file, before)
   }
+  expect(errors).toEqual([])
+})
+
+/**
+ * Row 72(a): a luu with no `[server] ssh` takes links from Remote access, at
+ * once — it used to say *restart luu serve*. **Last in the file**: the
+ * listener stays for the life of this server, and `[server] ssh` is written.
+ * See `RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md`.
+ */
+test("Remote access takes links when asked, without a restart", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const free = await new Promise(done => {
+    const probe = createNetServer().listen(0, "127.0.0.1", () => {
+      const { port } = /** @type {import("node:net").AddressInfo} */ (probe.address())
+      probe.close(() => done(port))
+    })
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Remote access")')
+  const pane = page.locator('[data-section="remote"]')
+  await expect(pane.getByText("This luu takes no links yet")).toBeVisible()
+  await pane.getByLabel("Take links on").fill(`127.0.0.1:${free}`)
+  await pane.getByRole("button", { name: "Take links" }).click()
+  await expect(pane.getByText(`Links come to port ${free}`)).toBeVisible()
+  await expect(pane.getByRole("button", { name: "Take links" })).toHaveCount(0)
+  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain(`ssh = "127.0.0.1:${free}"`)
   expect(errors).toEqual([])
 })

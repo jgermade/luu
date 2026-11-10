@@ -512,12 +512,13 @@ struct File {
     /// `[auth]`: how a public server's logins behave. See [`AuthTable`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<AuthTable>,
-    /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    host: BTreeMap<String, Host>,
     /// `[peer.<name>]`: another luu this one links to, by key. See [`Peer`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     peer: BTreeMap<String, Peer>,
+    /// `[project."<folder>"]`: what a person allowed *always in this project*,
+    /// by the session folder's absolute path. See [`ProjectGrants`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    project: BTreeMap<String, ProjectGrants>,
 }
 
 /// `[server]`: how `luu serve` is reached, written down rather than typed on
@@ -634,23 +635,41 @@ pub fn is_origin(origin: &str) -> bool {
     matches!(scheme, "http" | "https") && !rest.is_empty() && !rest.contains(['/', '?', '#', ' '])
 }
 
-/// `[host.<name>]`: another machine's `luu serve`, reached through this one.
+/// `[project."<folder>"]`: what a person allowed **always in this project** —
+/// every draft of every session in that folder — answering a held call.
 ///
-/// The page asks for `/h/<name>/…` and this server forwards it to `url` with
-/// the token in `token-file` — so what the browser can reach is bounded by
-/// what somebody wrote here, and the token never reaches the page. A path and
-/// never a value, for the reason a provider's key is one. See
-/// `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+/// In luu's own config and never in the project's tree, so a repository
+/// cannot grant itself anything; keyed by the folder's absolute path, so
+/// allowing `npm` in one project allows it in no other. Only ever an `ask`
+/// turned into an allow: a list's `deny` is never asked, so never reaches
+/// here. See `RECORD/2026-11-09.always-in-this-project.completed.md`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Host {
-    /// Where its `luu serve` listens: `http://ryzen.local:7878`.
-    pub url: String,
-    /// The file holding the token that host was started with
-    /// (`--auth-token-file`). Absent for a host that asks for none, which is
-    /// one bound to loopback — another port on this machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_file: Option<PathBuf>,
+pub struct ProjectGrants {
+    /// Programs `run_command` may run, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+    /// Paths the file tools may write, relative to the folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
+}
+
+impl ProjectGrants {
+    /// As the grants a session's answers are made of.
+    pub fn grants(&self) -> std::collections::BTreeSet<agent_core::protocol::Grant> {
+        use agent_core::protocol::{Grant, GrantKind};
+        self.commands
+            .iter()
+            .map(|target| Grant {
+                kind: GrantKind::Command,
+                target: target.clone(),
+            })
+            .chain(self.writes.iter().map(|target| Grant {
+                kind: GrantKind::Write,
+                target: target.clone(),
+            }))
+            .collect()
+    }
 }
 
 /// `[peer.<name>]`: another luu this one links to, by key. Written by `luu
@@ -747,7 +766,7 @@ pub struct Sessions {
     pub auto_name: bool,
     /// How many sessions may be live at once, each with its agency, its
     /// worker and its container. One more is refused, naming the ones that
-    /// are. See `RECORD/2026-10-30.sessions-side-by-side.WIP.md` §3.
+    /// are. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §3.
     #[serde(default = "max_live")]
     pub max_live: usize,
     /// How long a live session nobody uses — no turn, no proposal waiting, no
@@ -865,6 +884,10 @@ pub struct Resend {
     /// an effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub results: Option<agent_core::context::Results>,
+    /// What the open job's oldest turns become before any is evicted: `never`
+    /// (absent) or `behind`. See `agent_core::context::Fold`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<agent_core::context::Fold>,
 }
 
 /// `[authority]`: what a draft or a plan is told about itself, as this
@@ -1008,8 +1031,8 @@ pub struct Config {
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
-    hosts: BTreeMap<String, Host>,
     peers: BTreeMap<String, Peer>,
+    projects: BTreeMap<String, ProjectGrants>,
     server: Option<Server>,
     auth: Option<AuthTable>,
 }
@@ -1090,12 +1113,6 @@ pub enum ConfigError {
         at: String,
         problem: String,
     },
-    #[error("{path}: [host.{name}]: {problem}")]
-    BadHost {
-        path: String,
-        name: String,
-        problem: String,
-    },
     #[error("-p {name} was named, and this machine has no {file}")]
     NoConfigFile { name: String, file: String },
 }
@@ -1153,15 +1170,14 @@ impl Config {
             resend: file.resend,
             authority: file.authority,
             engines: file.engine,
-            hosts: file.host,
             peers: file.peer,
+            projects: file.project,
             server: file.server,
             auth: file.auth,
         };
         config.held = config.check_default(path)?;
         config.check_engines(path)?;
         config.check_messages(path)?;
-        config.check_hosts(path)?;
         config.check_peers(path)?;
         config.check_server(path)?;
         config.check_images(path)?;
@@ -1340,28 +1356,6 @@ impl Config {
         Ok(())
     }
 
-    /// A host's name fits in a URL's path segment, and its URL is HTTP: the
-    /// proxy forwards there, and a `file://` or a bare word is not a server.
-    fn check_hosts(&self, path: &str) -> Result<(), ConfigError> {
-        for (name, host) in &self.hosts {
-            let problem = if !is_host_name(name) {
-                Some("a host's name is letters, digits, `-` and `_`".to_string())
-            } else if !(host.url.starts_with("http://") || host.url.starts_with("https://")) {
-                Some(format!("url = \"{}\" is not http:// or https://", host.url))
-            } else {
-                None
-            };
-            if let Some(problem) = problem {
-                return Err(ConfigError::BadHost {
-                    path: path.to_string(),
-                    name: name.clone(),
-                    problem,
-                });
-            }
-        }
-        Ok(())
-    }
-
     /// The whole of the load-time rule, and it is about one profile: a default
     /// off this machine that does not say so is **held**, and the answer is
     /// which one. A `remote = true` on a default that is this machine is taken
@@ -1512,8 +1506,8 @@ impl Config {
             resend: self.resend,
             authority: self.authority.clone(),
             engine: self.engines.clone(),
-            host: self.hosts.clone(),
             peer: self.peers.clone(),
+            project: self.projects.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
         })
@@ -1600,8 +1594,8 @@ impl Config {
             resend: self.resend,
             authority: self.authority.clone(),
             engines: self.engines.clone(),
-            hosts: self.hosts.clone(),
             peers: self.peers.clone(),
+            projects: self.projects.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
         }
@@ -1676,16 +1670,6 @@ impl Config {
         }
     }
 
-    /// The file as the project modal hands back the hosts: `[host.*]`, and
-    /// everything else this config already had, [`Config::with_resend`]'s
-    /// reason.
-    pub fn with_hosts(&self, hosts: BTreeMap<String, Host>) -> Self {
-        Self {
-            hosts,
-            ..self.clone()
-        }
-    }
-
     /// `[server]`, or every key absent.
     pub fn server(&self) -> Server {
         self.server.clone().unwrap_or_default()
@@ -1714,11 +1698,6 @@ impl Config {
         }
     }
 
-    /// Every host the file names.
-    pub fn hosts(&self) -> &BTreeMap<String, Host> {
-        &self.hosts
-    }
-
     /// Every luu this one links to.
     pub fn peers(&self) -> &BTreeMap<String, Peer> {
         &self.peers
@@ -1729,6 +1708,39 @@ impl Config {
     pub fn with_peers(&self, peers: BTreeMap<String, Peer>) -> Self {
         Self {
             peers,
+            ..self.clone()
+        }
+    }
+
+    /// What was allowed always, by project folder.
+    pub fn projects(&self) -> &BTreeMap<String, ProjectGrants> {
+        &self.projects
+    }
+
+    /// The same file with `grant` allowed always in `folder`, or taken back
+    /// (`allow = false`). A folder left with nothing is written as no table.
+    pub fn with_project_grant(
+        &self,
+        folder: &str,
+        grant: &agent_core::protocol::Grant,
+        allow: bool,
+    ) -> Self {
+        let mut projects = self.projects.clone();
+        let entry = projects.entry(folder.to_string()).or_default();
+        let list = match grant.kind {
+            agent_core::protocol::GrantKind::Command => &mut entry.commands,
+            agent_core::protocol::GrantKind::Write => &mut entry.writes,
+        };
+        list.retain(|target| *target != grant.target);
+        if allow {
+            list.push(grant.target.clone());
+            list.sort();
+        }
+        if entry.commands.is_empty() && entry.writes.is_empty() {
+            projects.remove(folder);
+        }
+        Self {
+            projects,
             ..self.clone()
         }
     }
@@ -2221,6 +2233,45 @@ mod tests {
 
     fn config(text: &str) -> Result<Config, ConfigError> {
         Config::from_toml(text, PATH)
+    }
+
+    /// Row 52: a grant for a project is written by folder, read back the
+    /// same, and taking the last one back writes no table.
+    #[test]
+    fn a_project_grant_is_written_by_folder_and_taken_back() {
+        use agent_core::protocol::{Grant, GrantKind};
+        let npm = Grant {
+            kind: GrantKind::Command,
+            target: "npm".into(),
+        };
+        let lock = Grant {
+            kind: GrantKind::Write,
+            target: "package-lock.json".into(),
+        };
+        let written = Config::default()
+            .with_project_grant("/home/me/web", &npm, true)
+            .with_project_grant("/home/me/web", &lock, true)
+            .with_project_grant("/home/me/web", &npm, true);
+        let text = written.render().unwrap();
+        assert!(text.contains("[project.\"/home/me/web\"]"), "{text}");
+        let again = Config::from_toml(&text, "config.toml").unwrap();
+        let grants = again.projects()["/home/me/web"].grants();
+        assert_eq!(grants.len(), 2, "npm once, however often it is allowed");
+        let gone = again
+            .with_project_grant("/home/me/web", &npm, false)
+            .with_project_grant("/home/me/web", &lock, false);
+        assert!(gone.projects().is_empty());
+        assert!(!gone.render().unwrap().contains("[project"));
+    }
+
+    /// `[host.*]` was removed with no compatibility (2026-11-09): a file that
+    /// still has one is refused like any table luu does not know.
+    #[test]
+    fn a_host_table_is_refused() {
+        assert!(
+            config("[host.casa]\nurl = \"http://casa:7878\"\n").is_err(),
+            "[host.*] loaded"
+        );
     }
 
     /// A profile's `engine` names a table the file has, or the file does not
@@ -2792,30 +2843,6 @@ mod tests {
     }
 
     #[test]
-    fn a_host_is_a_name_that_fits_a_path_and_an_http_url() {
-        let loaded =
-            config("[host.ryzen-box]\nurl = \"http://ryzen.local:7878\"\ntoken-file = \"~/t\"\n")
-                .expect("a host loads");
-        assert_eq!(loaded.hosts()["ryzen-box"].url, "http://ryzen.local:7878");
-        let again = Config::from_toml(&loaded.render().unwrap(), "config.toml").unwrap();
-        assert_eq!(
-            again.hosts(),
-            loaded.hosts(),
-            "written and read back unchanged"
-        );
-
-        for bad in [
-            "[host.\"a/b\"]\nurl = \"http://x\"\n",
-            "[host.x]\nurl = \"file:///etc\"\n",
-        ] {
-            assert!(
-                matches!(config(bad), Err(ConfigError::BadHost { .. })),
-                "{bad} loaded"
-            );
-        }
-    }
-
-    #[test]
     fn a_default_naming_nothing_is_a_load_error() {
         let error = config("default = \"gone\"\n").expect_err("there is no such profile");
         assert!(matches!(error, ConfigError::NoSuchDefault { .. }));
@@ -3155,6 +3182,7 @@ mod tests {
                 repeat: Some(agent_core::context::Repeat::Once),
                 prune: None,
                 results: None,
+                fold: None,
             })
             .render()
             .expect("it renders");

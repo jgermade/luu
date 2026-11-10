@@ -193,6 +193,13 @@ pub struct TurnView {
     /// a debug client is for.
     #[serde(default)]
     pub evicted_by: Option<TurnId>,
+    /// What this turn's selection folded behind, when it folded anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted: Option<crate::context::FoldedBehind>,
+    /// The turn whose selection folded *this* one behind: kept in the
+    /// transcript and marked, the way an evicted one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_by: Option<TurnId>,
     /// What this turn's selection pruned, when it pruned anything: the turns
     /// that gave up their spans so that none of them had to be dropped whole.
     #[serde(default)]
@@ -290,6 +297,8 @@ impl TurnView {
             tools: Vec::new(),
             dropped: None,
             evicted_by: None,
+            compacted: None,
+            compacted_by: None,
             cited: None,
             pruned_by: None,
             code: Vec::new(),
@@ -632,7 +641,7 @@ pub struct SessionSummary {
     pub archived_at: Option<u64>,
     /// Where it is live in `serve`, how it is: `None` for a session that is
     /// only stored — never opened since a restart, or put to sleep. See
-    /// `RECORD/2026-10-30.sessions-side-by-side.WIP.md`.
+    /// `RECORD/2026-10-30.sessions-side-by-side.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live: Option<Liveness>,
 }
@@ -756,6 +765,10 @@ pub struct SessionView {
     pub prune: Option<Prune>,
     #[serde(default)]
     pub results: Option<Results>,
+    /// The fold-behind rung the session ran under: `None` where the stream
+    /// does not say (before format 28, which was `never`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<crate::context::Fold>,
     /// What this session's draft turns are told about their authority, the
     /// stream's **last** header's word on it — [`Self::repeat`]'s reason, one
     /// field along. `None` is *unknown*, format-17-or-earlier's answer, and
@@ -808,6 +821,7 @@ impl SessionView {
             repeat: None,
             prune: None,
             results: None,
+            fold: None,
             authority_draft: None,
             authority_plan: None,
             tool_calls: None,
@@ -1133,6 +1147,27 @@ impl SessionView {
                 source: source.unwrap_or(PlanSource::Prose),
                 answer: None,
             }),
+            ServerMessage::Compacted {
+                turn,
+                turns,
+                tokens,
+                summary_tokens,
+                counter,
+            } => {
+                if let Some(view) = self.turn_mut(*turn) {
+                    view.compacted = Some(crate::context::FoldedBehind {
+                        turns: turns.clone(),
+                        tokens: *tokens,
+                        summary_tokens: *summary_tokens,
+                        counter: counter.clone(),
+                    });
+                }
+                for folded in turns {
+                    if let Some(view) = self.turn_mut(*folded) {
+                        view.compacted_by = Some(*turn);
+                    }
+                }
+            }
             ServerMessage::Evicted {
                 turn,
                 turns,
@@ -1590,6 +1625,7 @@ impl SessionView {
                     repeat,
                     prune,
                     results,
+                    fold,
                     authority_draft,
                     authority_plan,
                     tool_calls,
@@ -1613,6 +1649,7 @@ impl SessionView {
                     view.repeat = *repeat;
                     view.prune = *prune;
                     view.results = *results;
+                    view.fold = *fold;
                     // And the two notes, one field along.
                     view.authority_draft = authority_draft.clone();
                     view.authority_plan = authority_plan.clone();
@@ -1653,6 +1690,7 @@ mod tests {
                 repeat: Some(crate::context::Repeat::Always),
                 prune: Some(crate::context::Prune::Never),
                 results: Some(crate::context::Results::Kept),
+                fold: None,
                 authority_draft: None,
                 authority_plan: None,
                 tool_calls: None,
@@ -1864,12 +1902,14 @@ mod tests {
                     repeat,
                     prune,
                     results,
+                    fold,
                     ..
                 } => {
                     live.posture = posture;
                     live.repeat = repeat;
                     live.prune = prune;
                     live.results = results;
+                    live.fold = fold;
                 }
             }
         }
@@ -1959,6 +1999,51 @@ mod tests {
         assert!(
             view.turn(2).unwrap().evicted_by.is_none(),
             "still in the window",
+        );
+    }
+
+    /// Row 21: a fold behind marks both halves, as an eviction does — the turn
+    /// that folded, with what it saved, and the turns that now go out as its
+    /// summary.
+    #[test]
+    fn a_fold_behind_marks_the_turn_that_folded_and_the_turns_it_folded() {
+        let mut view = SessionView::new("s", "mock", "mock");
+        for turn in 1..=3 {
+            view.apply_protocol(
+                turn,
+                &ServerMessage::TurnStarted {
+                    turn,
+                    prompt: format!("q{turn}"),
+                    job: None,
+                },
+            );
+        }
+        view.apply_protocol(
+            4,
+            &ServerMessage::Compacted {
+                turn: 3,
+                turns: vec![1, 2],
+                tokens: 480,
+                summary_tokens: 31,
+                counter: Counter::Approximate,
+            },
+        );
+        let folded = view
+            .turn(3)
+            .unwrap()
+            .compacted
+            .clone()
+            .expect("what turn 3 folded");
+        assert_eq!(
+            (folded.turns, folded.tokens, folded.summary_tokens),
+            (vec![1, 2], 480, 31)
+        );
+        assert_eq!(view.turn(1).unwrap().compacted_by, Some(3));
+        assert_eq!(view.turn(2).unwrap().compacted_by, Some(3));
+        assert!(view.turn(3).unwrap().compacted_by.is_none());
+        assert!(
+            view.turn(1).unwrap().evicted_by.is_none(),
+            "folded is not gone"
         );
     }
 
@@ -2170,6 +2255,7 @@ mod tests {
             repeat: Some(crate::context::Repeat::Once),
             prune: Some(crate::context::Prune::Never),
             results: Some(crate::context::Results::Kept),
+            fold: None,
             authority_draft: None,
             authority_plan: None,
             tool_calls: None,

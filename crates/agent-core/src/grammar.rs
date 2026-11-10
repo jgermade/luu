@@ -58,17 +58,17 @@ const FENCE_TAG: &str = "tool";
 /// version closes that gap the only way a kept alternative *can* narrow
 /// anything: `prose` no longer contains `call`'s trigger substring, so the
 /// two languages are disjoint rather than nested, via
-/// [`Compiler::avoid_until_forced`].
+/// [`Compiler::avoid`].
 ///
-/// **What this still does not reach.** The trigger this compiles against is
-/// the one correct fence, `` ```tool ``. A reply fenced under a tool's own
-/// name instead (`` ```read_file ``, [`crate::tools::CallVerdict::Drifted`]'s
-/// own shape) never contains that substring, so it is untouched — ordinary
-/// `prose` as far as this grammar is concerned. Closing that too would need
-/// the same construction run once per tool name, forcing *every* one of
-/// them to either complete correctly or not be typed at all; not built here
-/// because the record this closes measures the one trigger the WIP proposal
-/// named, not every shape `score_call` can name.
+/// **And a fence under a tool's own name is never typed.** A reply fenced
+/// `` ```read_file `` instead ([`crate::tools::CallVerdict::Drifted`]'s own
+/// shape) never contained the trigger, so until 2026-11-09 it was ordinary
+/// prose here. Now every `` ```<tool> `` is avoided in the same automaton as
+/// the trigger, and its last character is not offered: the model writes the
+/// correct fence, or another word, or no fence. Forbidden rather than forced
+/// toward a call, because the drifted fence's body is not the call's shape —
+/// it is `{"path": …}` without the name, and a grammar that forced the name in
+/// after the fact would be guessing which tool was meant.
 pub fn compile(tools: &Tools) -> Result<String, GrammarError> {
     let mut compiler = Compiler::default();
     let ws = compiler.ws();
@@ -103,7 +103,19 @@ pub fn compile(tools: &Tools) -> Result<String, GrammarError> {
         "call-tail".into(),
         format!("\"\\n\" {tool_call} \"\\n\" {fence_close}"),
     );
-    let safe0 = compiler.avoid_until_forced("safe", &format!("```{FENCE_TAG}"), &call_tail);
+    // The one fence forces a call; a fence under a tool's own name — the
+    // drift `CallVerdict::Drifted` names, two of fifteen probe prompts in both
+    // arms — is never completed. Roadmap row 7; see
+    // `RECORD/2026-11-09.a-tool-s-own-fence-is-never-typed.completed.md`.
+    let fence = format!("```{FENCE_TAG}");
+    let drifts: Vec<String> = tools
+        .names()
+        .filter(|name| !name.starts_with(FENCE_TAG))
+        .map(|name| format!("```{name}"))
+        .collect();
+    let mut patterns = vec![(fence.as_str(), End::Forced(&call_tail))];
+    patterns.extend(drifts.iter().map(|d| (d.as_str(), End::Forbidden)));
+    let safe0 = compiler.avoid("safe", &patterns);
     compiler.define("root".into(), safe0);
 
     Ok(compiler.render())
@@ -280,66 +292,42 @@ impl Compiler {
     /// because the alternative is re-deriving the failure function by hand
     /// for every fence this project ever adds, silently wrong the first time
     /// the pattern self-overlaps in a way `` ```tool `` happens not to.
+    ///
+    /// Kept for the tests that pin that construction state for state; the
+    /// grammar itself is built by [`Self::avoid`], of which this is the
+    /// one-pattern case.
+    #[cfg(test)]
     fn avoid_until_forced(&mut self, prefix: &str, pattern: &str, tail_rule: &str) -> String {
-        let chars: Vec<char> = pattern.chars().collect();
-        let n = chars.len();
-        assert!(n > 0, "avoid_until_forced needs a non-empty pattern");
+        self.avoid(prefix, &[(pattern, End::Forced(tail_rule))])
+    }
 
-        // KMP's own failure function: `pi[i]` is the length of the longest
-        // proper prefix of `pattern[0..i)` that is also a suffix of it.
-        let mut pi = vec![0usize; n + 1];
-        for i in 1..n {
-            let mut k = pi[i];
-            while k > 0 && chars[k] != chars[i] {
-                k = pi[k];
-            }
-            if chars[k] == chars[i] {
-                k += 1;
-            }
-            pi[i + 1] = k;
-        }
-
+    /// `avoid_until_forced` over several patterns at once: text that
+    /// contains none of them, where completing one either hands off to its
+    /// tail rule ([`End::Forced`]) or cannot happen at all
+    /// ([`End::Forbidden`] — the character that would complete it is not
+    /// offered). One automaton for all of them, because two automata cannot
+    /// both own the same stream of characters: [`automaton`] is Aho-Corasick,
+    /// of which the single-pattern case is KMP, state for state.
+    fn avoid(&mut self, prefix: &str, patterns: &[(&str, End<'_>)]) -> String {
+        let states = automaton(patterns);
         let state_name = |i: usize| format!("{prefix}-{i}");
-
-        for i in 0..n {
-            // Walking `i`, `pi[i]`, `pi[pi[i]]`, … visits, in order, every
-            // character that leads somewhere other than "start over" — the
-            // one that advances the match, then whichever earlier state's
-            // own expected character would have advanced instead, and so
-            // on. The first occurrence of any character in this chain is
-            // the one that governs it; a character never reached by the
-            // chain falls through to state 0.
-            let mut specials: Vec<(char, Option<usize>)> = Vec::new();
-            let mut k = i;
-            loop {
-                if k < n {
-                    let c = chars[k];
-                    if !specials.iter().any(|(seen, _)| *seen == c) {
-                        let target = if k + 1 == n { None } else { Some(k + 1) };
-                        specials.push((c, target));
-                    }
-                }
-                if k == 0 {
-                    break;
-                }
-                k = pi[k];
-            }
-
+        for (i, edges) in states.iter().enumerate() {
             let mut branches = vec!["\"\"".to_string()];
             let mut excluded = String::new();
-            for (c, target) in &specials {
+            for (c, edge) in edges {
                 excluded.push_str(&class_char(*c));
-                let dest = match target {
-                    None => tail_rule.to_string(),
-                    Some(next) => state_name(*next),
+                let dest = match edge {
+                    Edge::To(next) => state_name(*next),
+                    Edge::Ends(End::Forced(tail)) => tail.to_string(),
+                    // Excluded and offered nowhere: the one character that
+                    // would complete it is the one this state cannot take.
+                    Edge::Ends(End::Forbidden) => continue,
                 };
                 branches.push(format!("( {} {dest} )", literal(&c.to_string())));
             }
             branches.push(format!("( [^\\x00{excluded}] {} )", state_name(0)));
-
             self.define(state_name(i), branches.join(" | "));
         }
-
         state_name(0)
     }
 
@@ -349,6 +337,132 @@ impl Compiler {
             .map(|(name, body)| format!("{name} ::= {body}\n"))
             .collect()
     }
+}
+
+/// What completing a pattern in [`Compiler::avoid`] leads to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum End<'a> {
+    /// Only this rule may follow: the pattern is the start of something
+    /// well-formed, and nothing else is.
+    Forced(&'a str),
+    /// Nothing may: the pattern is never completed.
+    Forbidden,
+}
+
+/// Where a character takes a state of [`automaton`]. A character a state does
+/// not list goes back to state 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge<'a> {
+    To(usize),
+    Ends(End<'a>),
+}
+
+/// The substring-avoidance automaton over `patterns`: one state per proper
+/// prefix of a pattern (state 0 the empty one, the rest in breadth-first
+/// order, which for one pattern is *matched `i` characters*), and for each
+/// state the characters that lead anywhere but back to state 0.
+///
+/// Aho-Corasick: a trie of the patterns with failure links, and each state's
+/// transitions completed through them, so a partial match that turns out to
+/// be the start of another pattern — `` ```ru `` on the way to `` ```run_command ``
+/// that becomes `` ```rust `` — falls back to the longest prefix still alive
+/// rather than to nothing. A transition that completes a pattern, directly or
+/// as a suffix of what was typed, is that pattern's [`End`].
+fn automaton<'a>(patterns: &[(&str, End<'a>)]) -> Vec<Vec<(char, Edge<'a>)>> {
+    assert!(
+        patterns.iter().all(|(p, _)| !p.is_empty()),
+        "every pattern to avoid needs a character"
+    );
+    // The trie: children, and the pattern a node completes.
+    let mut children: Vec<Vec<(char, usize)>> = vec![Vec::new()];
+    let mut ends: Vec<Option<End<'a>>> = vec![None];
+    for (pattern, end) in patterns {
+        let mut node = 0;
+        for c in pattern.chars() {
+            node = match children[node].iter().find(|(k, _)| *k == c) {
+                Some((_, next)) => *next,
+                None => {
+                    children.push(Vec::new());
+                    ends.push(None);
+                    let next = children.len() - 1;
+                    children[node].push((c, next));
+                    next
+                }
+            };
+        }
+        ends[node].get_or_insert(*end);
+    }
+    // Failure links, breadth first, and each node's end inherited from the
+    // longest suffix that completes a pattern.
+    let mut fail = vec![0usize; children.len()];
+    let mut order = Vec::new();
+    let mut queue: std::collections::VecDeque<usize> =
+        children[0].iter().map(|(_, n)| *n).collect();
+    while let Some(node) = queue.pop_front() {
+        order.push(node);
+        for &(c, child) in &children[node].clone() {
+            let mut f = fail[node];
+            let target = loop {
+                if let Some((_, next)) = children[f].iter().find(|(k, _)| *k == c) {
+                    break *next;
+                }
+                if f == 0 {
+                    break 0;
+                }
+                f = fail[f];
+            };
+            fail[child] = if target == child { 0 } else { target };
+            if ends[child].is_none() {
+                ends[child] = ends[fail[child]];
+            }
+            queue.push_back(child);
+        }
+    }
+    // The states: the root and every node that completes nothing, numbered
+    // in breadth-first order.
+    let live: Vec<usize> = std::iter::once(0)
+        .chain(order.into_iter().filter(|n| ends[*n].is_none()))
+        .collect();
+    let number = |node: usize| live.iter().position(|n| *n == node);
+    let step = |mut node: usize, c: char| loop {
+        if let Some((_, next)) = children[node].iter().find(|(k, _)| *k == c) {
+            return *next;
+        }
+        if node == 0 {
+            return 0;
+        }
+        node = fail[node];
+    };
+    live.iter()
+        .map(|&node| {
+            // The characters worth listing: the children of this node and of
+            // every node on its failure chain; any other goes back to 0.
+            let mut chars: Vec<char> = Vec::new();
+            let mut f = node;
+            loop {
+                for (c, _) in &children[f] {
+                    if !chars.contains(c) {
+                        chars.push(*c);
+                    }
+                }
+                if f == 0 {
+                    break;
+                }
+                f = fail[f];
+            }
+            chars
+                .into_iter()
+                .filter_map(|c| {
+                    let next = step(node, c);
+                    match ends[next] {
+                        Some(end) => Some((c, Edge::Ends(end))),
+                        None if next == 0 => None,
+                        None => Some((c, Edge::To(number(next).expect("a live node")))),
+                    }
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// A GBNF string literal matching exactly `text`, escaped the way the
@@ -507,6 +621,122 @@ mod tests {
                 "{name} has no way to just stop: {body}"
             );
         }
+    }
+
+    /// Runs `text` through an [`automaton`]: where it ends up, or the end
+    /// that stopped it.
+    fn walk<'a>(states: &[Vec<(char, Edge<'a>)>], text: &str) -> Result<usize, End<'a>> {
+        let mut state = 0;
+        for c in text.chars() {
+            state = match states[state].iter().find(|(k, _)| *k == c) {
+                Some((_, Edge::To(next))) => *next,
+                Some((_, Edge::Ends(end))) => return Err(*end),
+                None => 0,
+            };
+        }
+        Ok(state)
+    }
+
+    /// Row 7: one automaton, the trigger forced and a tool's own fence never
+    /// completed, and everything else — another language's fence, a fence
+    /// that starts like a tool's and turns away — still prose.
+    #[test]
+    fn a_tool_s_own_fence_is_never_completed_and_other_fences_are_prose() {
+        let states = automaton(&[
+            ("```tool", End::Forced("TAIL")),
+            ("```read_file", End::Forbidden),
+            ("```run_command", End::Forbidden),
+        ]);
+        assert_eq!(walk(&states, "a call:\n```tool"), Err(End::Forced("TAIL")));
+        assert_eq!(walk(&states, "here:\n```read_file"), Err(End::Forbidden));
+        assert_eq!(walk(&states, "``````run_command"), Err(End::Forbidden));
+        for prose in [
+            "```rust\nfn main() {}\n```",
+            "```read_fil",
+            "```ru",
+            "``` tool",
+        ] {
+            assert!(walk(&states, prose).is_ok(), "{prose:?} is prose");
+        }
+        // A longer word that starts with the fence still has it as a prefix.
+        assert_eq!(walk(&states, "```read_fileish"), Err(End::Forbidden));
+        // `` ```ru `` was on its way to `run_command`; `s` turns it into
+        // `rust`, and the automaton is back at the start, not stuck.
+        assert_eq!(walk(&states, "```rus"), Ok(0));
+    }
+
+    /// The grammar it renders: every standard tool's fence is excluded from
+    /// prose at its last character, and the trigger still hands off.
+    #[test]
+    fn the_compiled_grammar_avoids_every_tool_s_own_fence() {
+        let grammar = compile(&Tools::standard()).unwrap();
+        for name in Tools::standard().names() {
+            assert!(
+                !grammar.contains(&format!("```{name}")),
+                "{name}: {grammar}"
+            );
+        }
+        assert!(grammar.contains("call-tail"), "{grammar}");
+        // The state one character short of `` ```list_dir `` offers no `r`,
+        // neither as a branch nor through its catch-all.
+        let rule = grammar_rule_for(&grammar, "```list_di");
+        assert!(!rule.contains("( \"r\" "), "{rule}");
+        assert!(rule.contains("[^\\x00r"), "{rule}");
+    }
+
+    /// Every name a rule refers to is a rule, once literals and classes are
+    /// taken out: what a GBNF parser checks first, here where no server is.
+    #[test]
+    fn every_rule_the_grammar_names_is_defined() {
+        let grammar = compile(&Tools::standard()).unwrap();
+        let defined: std::collections::HashSet<&str> = grammar
+            .lines()
+            .filter_map(|line| line.split_once(" ::= ").map(|(name, _)| name))
+            .collect();
+        for line in grammar.lines() {
+            let (_, body) = line.split_once(" ::= ").unwrap();
+            let mut bare = String::new();
+            let mut chars = body.chars();
+            while let Some(c) = chars.next() {
+                let close = match c {
+                    '"' => '"',
+                    '[' => ']',
+                    other => {
+                        bare.push(other);
+                        continue;
+                    }
+                };
+                // Through the closing quote or bracket, escapes skipped.
+                while let Some(inner) = chars.next() {
+                    if inner == '\\' {
+                        chars.next();
+                    } else if inner == close {
+                        break;
+                    }
+                }
+                bare.push(' ');
+            }
+            for word in bare.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+                if !word.is_empty() {
+                    assert!(defined.contains(word), "{word} in {line}");
+                }
+            }
+        }
+    }
+
+    /// The `safe-N` rule a prefix of the standard fences ends in.
+    fn grammar_rule_for(grammar: &str, typed: &str) -> String {
+        let tools = Tools::standard();
+        let fence = format!("```{FENCE_TAG}");
+        let drifts: Vec<String> = tools.names().map(|n| format!("```{n}")).collect();
+        let mut patterns = vec![(fence.as_str(), End::Forced("call-tail"))];
+        patterns.extend(drifts.iter().map(|d| (d.as_str(), End::Forbidden)));
+        let state = walk(&automaton(&patterns), typed).unwrap();
+        grammar
+            .lines()
+            .find(|line| line.starts_with(&format!("safe-{state} ::=")))
+            .unwrap()
+            .to_string()
     }
 
     #[test]

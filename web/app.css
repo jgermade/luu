@@ -911,7 +911,7 @@ html.resizing-rows, html.resizing-rows * { cursor: row-resize !important; user-s
 
 
 /* A live session not on screen wants a look: a turn ended there, or (amber)
-   it waits at its gate. See RECORD/2026-10-30.sessions-side-by-side.WIP.md §6. */
+   it waits at its gate. See RECORD/2026-10-30.sessions-side-by-side.completed.md §6. */
 .chat .acts button.history { position: relative; }
 .chat .acts button.history .behind {
   position: absolute;

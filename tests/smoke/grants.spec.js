@@ -150,7 +150,7 @@ test("a command left to a person is asked, allowed or denied for the session, an
   await expect(card).toBeVisible({ timeout: 30_000 })
   await expect(card.locator(".why")).toContainText("may not run git")
   await expect(card.locator(".question pre")).toHaveText("git --version")
-  await expect(card.locator(".answers button")).toHaveText(["Allow", "Deny"])
+  await expect(card.locator(".answers button")).toHaveText(["Allow", "Deny", "Always in this project"])
   // Linux holds it, so nothing is said; where the kernel cannot — macOS —
   // the question says so before the click, as the server words it there.
   await expect(card.locator(".unheld")).toHaveCount(0)

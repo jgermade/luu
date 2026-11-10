@@ -19,7 +19,7 @@ of its strikes.
 - Row 60, superseded by 65.
 - Row 61, decided: a remote server keeps its own configuration.
 - Row 14, **concurrency**. This one was never struck there. Steps 1–4 of
-  [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md)
+  [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md)
   built several live sessions, each with its own worker and folder, on
   2026-10-30, and the row sat in Section D still saying *needs a design
   argument*. It is struck there now, in place.
@@ -34,6 +34,17 @@ Narrowed and carried: 49, 50, 51 and 55. Carried, some with a line added: 1,
 **Numbers are carried, not reassigned.** [`luu-design.md`](../../luu-design.md)
 names item 12 by number, and a number that moves between revisions is a link
 that lies.
+
+## Picking up, as of the end of 2026-11-09
+
+Built on `claude/admiring-sagan-k1wri6` since this revision was cut: rows 7,
+21, 43, 44, 45, 52, 54, 72(a)(b)(c) and 73 — each struck in place below, with
+its record. **Next, on a new branch and session: row 51.** Read
+[`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §*where 51
+stands* first: it lists what 51 touches and the one question to ask before
+building. After it, what is left without a machine is row 29; everything else
+waits on machine 3 (rows 36, 38 — now with `--fold-behind` arms — 39, 40, 41,
+42 and row 7's run), another machine, an account, a cluster or a decision.
 
 ## The calibration finding: the order said A, and the work went to I
 
@@ -82,7 +93,7 @@ Every run is on a server started with one slot (`-np 1`), for the reason
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 38 | **The mixed corpus, run.** *Built 2026-11-08*: `scripts/tasks/mixed-session.txt`, eleven turns over a Python project, one failing test, a log read in pages; it overflows 8K for the fewest calls that answer it, and turn 10 asks for what only turn 2's command output carries. The arms: 8192, 98304, 8192 at `--max-tool-steps 16` (that one is row 36), and 8192 under `--prune-behind` with `results` `cited_reads` and `cited`. Turn 2's answer is read before turn 10 is scored | machine 3 | [`a-corpus-that-overflows-with-mixed-output`](../../RECORD/2026-11-08.a-corpus-that-overflows-with-mixed-output.completed.md) |
+| 38 | **The mixed corpus, run.** *Built 2026-11-08*: `scripts/tasks/mixed-session.txt`, eleven turns over a Python project, one failing test, a log read in pages; it overflows 8K for the fewest calls that answer it, and turn 10 asks for what only turn 2's command output carries. The arms: 8192, 98304, 8192 at `--max-tool-steps 16` (that one is row 36), and 8192 under `--prune-behind` with `results` `cited_reads` and `cited`. *Added 2026-11-09*: 8192 under `--fold-behind`, alone and with `--prune-behind` — row 21's rung, off until this says what it costs. Turn 2's answer is read before turn 10 is scored | machine 3 | [`a-corpus-that-overflows-with-mixed-output`](../../RECORD/2026-11-08.a-corpus-that-overflows-with-mixed-output.completed.md) |
 | 36 | **Is the gap the window or the step limit?** `--max-tool-steps 16` at 8192 and 98304, on `long-session.txt` as ordered and now on the mixed corpus too, in the same afternoon. Read the `read_file` arguments, not only their count: a new range is paging, and the same range again is re-reading | machine 3 | [`8k-against-96k-on-the-m4-pro`](../../RECORD/2026-09-22.8k-against-96k-on-the-m4-pro.completed.md) §Still open |
 | 41 | **What the design says the differentiator is worth.** §Goals gets a sentence saying what was measured, or a new argument. **Not a run: a decision.** If 36 and 38 have not run by the next revision, it is decided on what is on disk, and said to rest on one corpus | rows 36 and 38, or the next revision | [`8k-against-96k-on-the-m4-pro`](../../RECORD/2026-09-22.8k-against-96k-on-the-m4-pro.completed.md) §Still open; [`local-first`](../../RECORD/2026-09-01.local-first.completed.md) |
 | 39 | **Whether an approved plan lands the fix either way**, with `position = "prompt"`, a second seed, and a task that needs more than one read | machine 3 | [`an-authority-a-model-is-told`](../../RECORD/2026-09-22.an-authority-a-model-is-told.completed.md) §Still open |
@@ -98,19 +109,19 @@ Every run is on a server started with one slot (`-np 1`), for the reason
 | --- | --- | --- | --- |
 | 37 | **A citation that says where the bytes went**: a pointer (path and range) in place of the fact. Behind 36 on purpose. If September's reads were paging, a pointer is worth less than it looked | row 36 | [`8k-against-96k-on-the-m4-pro`](../../RECORD/2026-09-22.8k-against-96k-on-the-m4-pro.completed.md) §Still open; [`the-newest-body-wins`](../../RECORD/2026-09-20.the-newest-body-wins.completed.md) §Still open |
 | 42 | **The 27B's tool-call format works by a fallback**: `<tool_call>{…}</tool_call>` and a leaked `</think>`, run because `parse_call` takes a bare object. How often is not on disk, because the evidence keeps luu's rendering and not the raw reply. **Row 38's run should keep the raw reply** | nothing | [`a-grammar-for-tool-calls`](../../RECORD/2026-09-06.a-grammar-for-tool-calls.completed.md) |
-| 7 | **Drift under a tool's own name**: wants `avoid_until_forced` once per tool name | nothing | [`what-constrain-does`](../../RECORD/2026-09-14.what-constrain-does.completed.md) §Still open |
+| ~~7~~ | ~~**Drift under a tool's own name**: wants `avoid_until_forced` once per tool name~~ *Built 2026-11-09*: one Aho-Corasick automaton for the trigger and every `` ```<tool> ``, the latter never completed. The grammar arm's probe has not been re-run on a server — [`a-tool-s-own-fence-is-never-typed`](../../RECORD/2026-11-09.a-tool-s-own-fence-is-never-typed.completed.md) | ~~nothing~~; the run wants machine 3 | [`what-constrain-does`](../../RECORD/2026-09-14.what-constrain-does.completed.md) §Still open |
 | 29 | **The tally has no denominator and no opinion**, plus drafts approved against drafts folded, and how often the floor refuses | nothing | [`one-counting-surface`](../../RECORD/2026-09-19.one-counting-surface.completed.md), [`what-an-unapproved-turn-may-reach`](../../RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md) §Still open |
-| 21 | **A window that no longer fits is absorbed in silence**: make it visible, not configurable | a design argument | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §6th |
-| 30 | **Whether a draft's fold is worth its summary** | a design argument | [`every-turn-belongs-to-a-job`](../../RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md) §Still open |
+| ~~21~~ | ~~**A window that no longer fits is absorbed in silence**: make it visible, not configurable~~ *Built 2026-11-09*: a fourth rung, *fold behind*, which says itself in the chat — [`fold-behind`](../../RECORD/2026-11-09.fold-behind.completed.md). Off until row 38 measures it | ~~a design argument~~ | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §6th |
+| 30 | **Whether a draft's fold is worth its summary** — *Decided 2026-11-09*: by real runs, nothing built first — [`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §30 | a design argument | [`every-turn-belongs-to-a-job`](../../RECORD/2026-09-20.every-turn-belongs-to-a-job.completed.md) §Still open |
 | 28 | **The two keys by content, and the migration they cost**. Ordered, not scheduled | rule A reaching more than spans | [`the-window-rules-are-a-session-fact`](../../RECORD/2026-09-18.the-window-rules-are-a-session-fact.completed.md) §sixth, §eleventh |
 
-**Section C — the gate.** 43 still leads, because it may be a sandbox defect.
+**Section C — the gate.** ~~43 still leads, because it may be a sandbox defect.~~ 43 was one, though not the one it named: [`one-site-chooses-what-holds-a-turn`](../../RECORD/2026-11-09.one-site-chooses-what-holds-a-turn.completed.md). 44 and 45 followed it the same day; 12 is what is left, and waits on its field.
 
 | # | Item | Blocked on | Argued in |
 | --- | --- | --- | --- |
-| 43 | **The two sites that choose the floor decide differently**: `begin_turn` trusts `session.narrowed`, while `start_turn` checks it against the live job. The next move is a test that tries. Several live sessions (row 14, closed) make it worth trying sooner | nothing | [`what-an-unapproved-turn-may-reach`](../../RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md) §1 |
-| 44 | **The floor is shown only at the gate** | nothing | the same, §Still open |
-| 45 | **A pre-alternation recording reads an approved job as a draft** | nothing | [`the-alternation-on-the-page`](../../RECORD/2026-09-21.the-alternation-on-the-page.completed.md) §Still open |
+| ~~43~~ | ~~**The two sites that choose the floor decide differently**: `begin_turn` trusts `session.narrowed`, while `start_turn` checks it against the live job. The next move is a test that tries. Several live sessions (row 14, closed) make it worth trying sooner~~ *Done 2026-11-09*: one function for both. The stale narrowing has no path; what the test found instead is an approved job whose plan stopped resolving ran on the floor, and now runs on nothing | ~~nothing~~ | [`what-an-unapproved-turn-may-reach`](../../RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md) §1 |
+| ~~44~~ | ~~**The floor is shown only at the gate**~~ *Done 2026-11-09*: the head's job menu opens on *What it may do* — the floor for a draft, the plan for a job — [`what-a-draft-may-reach-without-a-gate`](../../RECORD/2026-11-09.what-a-draft-may-reach-without-a-gate.completed.md) | ~~nothing~~ | the same, §Still open |
+| ~~45~~ | ~~**A pre-alternation recording reads an approved job as a draft**~~ *Done 2026-11-09*: a job is a draft when it has no plan **and** nobody approved it — [`an-approval-without-a-plan-is-not-a-draft`](../../RECORD/2026-11-09.an-approval-without-a-plan-is-not-a-draft.completed.md) | ~~nothing~~ | [`the-alternation-on-the-page`](../../RECORD/2026-09-21.the-alternation-on-the-page.completed.md) §Still open |
 | 12 | **Grants are counted as path strings and not as kinds**: closed by a field written at approval | the field | [`one-counting-surface`](../../RECORD/2026-09-19.one-counting-surface.completed.md) |
 
 **Section D — wants an argument before it wants a commit.** Row 14 left this
@@ -131,12 +142,12 @@ in *italics* are in
 | 46 | **What a yes to a command reaches**: whether the question offers the program without the writes | how often it is asked | *the proxy waits, and a command is granted whole* |
 | 47 | **The egress proxy, connected**: built and never started | nothing; postponed | *step 2's decisions*, 2 |
 | 48 | **A grant per host, once or for the session** | row 47 | *step 2's decisions*, 2 |
-| 49 | **The seam carries the outcome, not the policy**: `{ cmd, paths, network, limits }`, the files list as mounts, and a files `deny` held. *Narrowed*: the folder as the session's base was built 2026-10-30 ([`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md) step 3) | nothing | *decided, and where every file lives* §2, §4 |
+| 49 | **The seam carries the outcome, not the policy**: `{ cmd, paths, network, limits }`, the files list as mounts, and a files `deny` held. *Narrowed*: the folder as the session's base was built 2026-10-30 ([`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) step 3) | nothing | *decided, and where every file lives* §2, §4 |
 | 50 | **The working directory stops deciding**: its `luu.toml` only with `--sandbox`, and `.luu/policy.toml` as a suggestion adopted with its hash. *Narrowed*: `[approvals]` moved to luu's config on 2026-10-30 ([`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) step 4) | nothing | *decided, and where every file lives* §3, §6 |
-| 51 | **Settings edits environments, and a refusal's *Add to the policy*.** Lists and the new session's dialog were done 2026-10-23. Environments have to be decided first: kept as saved trios of lists, or gone with the postures | a decision on environments | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
-| 52 | **Always: a grant for the project**. Put off by decision | a decision | *always is for later* |
+| 51 | **Environments and postures go** (decided 2026-11-09, B), and a refusal's *Add to the policy*. *Not started; handed to a new branch and session.* What it touches, and the question to ask first — whether the server's own policy file goes too — are in [`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §*where 51 stands* | the server's own policy file: a question | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
+| ~~52~~ | ~~**Always: a grant for the project**~~ *Built 2026-11-09*: *Always in this project*, in luu's config by folder, listed and taken back in Settings → Policies — [`always-in-this-project`](../../RECORD/2026-11-09.always-in-this-project.completed.md) | ~~a decision~~ | *always is for later* |
 | 53 | **A yes that needs a signature** where `[approvals] required = true` | row 16 | [`a-refused-write-asks`](../../RECORD/2026-10-02.a-refused-write-asks.completed.md) §Still open |
-| 54 | **The `--allow-*` flags add a second rule for a path, and the first answers**: `policies::widen` merges by path, and the flags do not | nothing | *step 2a, built* |
+| ~~54~~ | ~~**The `--allow-*` flags add a second rule for a path, and the first answers**~~ *Done 2026-11-09*, in `Sandbox::new` rather than the flags: one root per path, the greater access. A plan with a file in both `files` and `writes` was read-only by the same defect — [`one-rule-per-path`](../../RECORD/2026-11-09.one-rule-per-path.completed.md) | ~~nothing~~ | *step 2a, built* |
 | 55 | **More than one call in a reply: the count.** Built 2026-10-25. What is left is the grounded scripts under `--tool-calls native`, with tool cards per step | the count | [`more-than-one-call-in-a-reply`](../../RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md) |
 
 **Section F — the public luu, what is still owed.** Sections F to I of the last
@@ -148,8 +159,8 @@ leftover, and it says which row it comes from.
 | 71 | **A real mail server** (from 57): a TLS handshake that succeeds against a certificate under a public root, by `smtps://` and by STARTTLS. **Before a second real person is let in** | an SMTP account | [`an-owner-proved-by-email`](../../RECORD/2026-11-03.an-owner-proved-by-email.WIP.md) |
 | 62 | **The `kubernetes` runtime on a cluster**: a session's pod next, after the certificate | a cluster | [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md); [`a-certificate-from-traefik`](../../RECORD/2026-11-04.a-certificate-from-traefik.completed.md) |
 | 63 | **A sweep of `Completed` worker pods** at luu's start | row 62 | [`a-pod-per-session`](../../RECORD/2026-11-03.a-pod-per-session.WIP.md) |
-| 72 | **Links' leftovers**: (a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine on the model a linked request names; (c) `[host.*]` removed, which needs a decision first; (d) the links Service's LoadBalancer | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) |
-| 73 | **Sessions side by side, step 5**: before a session starts on a second local model, say what it will hold in memory. The record stays `WIP` until this is built | nothing | [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.WIP.md) §4 |
+| 72 | **Links' leftovers**: ~~(a) `[server] ssh` started without restarting `serve`; (b) a llama.cpp engine on the model a linked request names~~ *(a) and (b) done 2026-11-09*, [`a-linked-request-moves-the-engine`](../../RECORD/2026-11-09.a-linked-request-moves-the-engine.completed.md); ~~(c) `[host.*]` removed~~ *decided and done 2026-11-09, no compatibility*; (d) the links Service's LoadBalancer | (c) a decision; (d) row 62 | [`one-luu-to-another-over-ssh`](../../RECORD/2026-11-03.one-luu-to-another-over-ssh.completed.md) |
+| ~~73~~ | ~~**Sessions side by side, step 5**: before a session starts on a second local model, say what it will hold in memory. The record stays `WIP` until this is built~~ *Done 2026-11-09*: the dialog names what is loaded, what this would load and the weights together — [`a-second-local-model-warned`](../../RECORD/2026-11-09.a-second-local-model-warned.completed.md) | ~~nothing~~ | [`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) §4 |
 | 74 | **Proved on stand-ins, owed on the real thing**: a real authenticator's discoverable login (from 59; Chromium's virtual one would not answer it); the isolation run on the next release's own image layers (from 70); an admin's page clicked through (from 58) | an authenticator; a release | [`passkeys`](../../RECORD/2026-11-05.passkeys.completed.md), [`the-isolation-run-in-the-image`](../../RECORD/2026-11-04.the-isolation-run-in-the-image.completed.md), [`roles-in-the-page`](../../RECORD/2026-11-05.roles-in-the-page.completed.md) |
 
 ~~**Asked and not answered**: what the person saw of the phone's three slides,
@@ -170,15 +181,15 @@ gantt
     section B — the window
     The 27B call format (raw reply kept)   :fmt, 2026-11-09, 1d
     A citation that says where             :ptr, after run, 2d
-    Drift under a tool's own name          :drift, after fmt, 2d
+    Drift under a tool's own name (built)  :done, drift, 2026-11-09, 1d
     Denominators                           :tally, after drift, 1d
     section C — the gate
-    Two sites choose the floor             :crit, sites, 2026-11-09, 1d
-    The floor while drafting               :floor, after sites, 1d
-    Pre-alternation job read as draft      :prealt, after floor, 1d
+    Two sites choose the floor (done)      :done, sites, 2026-11-09, 1d
+    The floor while drafting (done)        :done, floor, after sites, 1d
+    Pre-alternation job read as draft (done) :done, prealt, after floor, 1d
     section F — the public luu
-    Links leftovers a and b                :links, 2026-11-10, 2d
-    A second local model, warned           :mem, after links, 1d
+    Links leftovers a and b (done)         :done, links, 2026-11-09, 1d
+    A second local model, warned (done)    :done, mem, 2026-11-09, 1d
 ```
 
 Not on the chart: rows 1, 3, 4, 35 and 75 (a hand on a box), 71 and 74 (an account
@@ -194,12 +205,13 @@ unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c).
   cannot be carried again.
 - **Row 42 should ride along with 38**: a run that keeps the raw reply answers
   *how often* for free. Doing it afterwards costs a second run.
-- **Row 43 is checkout work, and it got more urgent.** Two live sessions now
+- ~~**Row 43 is checkout work, and it got more urgent.** Two live sessions now
   each have a floor, and a narrowing left behind by a job that is no longer
-  live is easier to reach than it was with one.
+  live is easier to reach than it was with one.~~ *Done 2026-11-09.*
 - **Row 51 waits on a decision, not on code**: whether environments survive
   postures. Building their editor first would decide it by accident.
 - **Section F needs things this repository does not have** (an SMTP account, a
-  cluster, an authenticator), except 72(a), 72(b) and 73, which are code.
+  cluster, an authenticator), except 72(a), 72(b) and 73, which are code —
+  and all three were built on 2026-11-09.
 - **Nothing in Sections B–F blocks anything in A.** The order above is a choice
   about what to learn first, not a dependency.
