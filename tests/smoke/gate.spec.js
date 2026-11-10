@@ -1734,17 +1734,24 @@ test.describe("Settings on a phone", () => {
     const section = await sheet.locator('.section.on[data-section="models"]').boundingBox()
     expect(section.width).toBeGreaterThan(380)
 
-    // A short pull on the head springs back; a long one closes it.
+    // A short slow pull on the head springs back; a long one closes it.
+    //
+    // **Slow on purpose.** The sheet closes on a flick — its last move faster
+    // than 0.5 px/ms — and eight steps of 7.5 px with nothing between them
+    // are one whenever two land within 15 ms, which is the machine's speed and
+    // not the gesture: it failed in CI on PR 77 and once in seven runs here.
+    // 40 ms a step is ~0.19 px/ms, a drag and not a flick on any machine.
     const head = await sheet.locator(".modal-head").boundingBox()
-    const pull = async dy => {
+    const pull = async (dy, pause = 0) => {
       await page.mouse.move(head.x + head.width / 2, head.y + 12)
       await page.mouse.down()
       for (let step = 1; step <= 8; step++) {
         await page.mouse.move(head.x + head.width / 2, head.y + 12 + (dy * step) / 8)
+        if (pause) await page.waitForTimeout(pause)
       }
       await page.mouse.up()
     }
-    await pull(60)
+    await pull(60, 40)
     await expect(sheet).toBeVisible()
     await expect.poll(bottom, { timeout: 10_000 }).toBe(844)
     await pull(400)
