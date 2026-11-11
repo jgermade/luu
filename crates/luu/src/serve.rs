@@ -3852,6 +3852,8 @@ async fn post_setup_send(
             user: asked.user.filter(|user| !user.trim().is_empty()),
             password: asked.password.filter(|password| !password.is_empty()),
             mounted: None,
+            // Not asked in the page: `luu config owner --smtp-ca-file`.
+            ca_file: None,
         },
     };
     if let Err(error) = mail.check() {

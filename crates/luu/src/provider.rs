@@ -608,6 +608,12 @@ pub struct SmtpTable {
     /// luu's environment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_ref: Option<String>,
+    /// A PEM of certificates the mail server's may chain to, **beside**
+    /// Mozilla's roots: a private CA's. Read on every send. For this one
+    /// host and nothing else luu connects to. See
+    /// `RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<PathBuf>,
 }
 
 impl AuthTable {

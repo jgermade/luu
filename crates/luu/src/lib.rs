@@ -905,6 +905,10 @@ struct SmtpArgs {
     /// secret.
     #[arg(long, value_name = "file:PATH")]
     smtp_password_ref: Option<String>,
+    /// A PEM of certificates the mail server's may chain to, beside the
+    /// public roots: a private CA's. Absolute; read on every send.
+    #[arg(long, value_name = "PATH")]
+    smtp_ca_file: Option<std::path::PathBuf>,
 }
 
 impl SmtpArgs {
@@ -914,6 +918,7 @@ impl SmtpArgs {
             || self.smtp_user.is_some()
             || self.smtp_password_file.is_some()
             || self.smtp_password_ref.is_some()
+            || self.smtp_ca_file.is_some()
     }
 }
 
@@ -1593,7 +1598,7 @@ fn mail_asked(smtp: &SmtpArgs) -> Result<crate::mail::Mail> {
         },
         (None, None, None) => mail,
     };
-    let mail = crate::mail::Mail { user, ..mail };
+    let mail = crate::mail::Mail { user, ..mail }.with_ca_file(smtp.smtp_ca_file.clone());
     mail.check()?;
     Ok(mail)
 }

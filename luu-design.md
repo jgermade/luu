@@ -1809,8 +1809,14 @@ page reloads.
    - `smtp://` without `tls=required` is refused except to this machine:
      with no `tls`, and with `tls=opportunistic`, which falls back to the
      clear when the server offers no STARTTLS.
-   - Only certificates under Mozilla's roots (`webpki-roots`) are trusted:
-     not the system's store, so a relay on a private CA is refused.
+   - Certificates under Mozilla's roots (`webpki-roots`) are trusted, not
+     the system's store — **and those in `ca-file`, beside them**, since
+     2026-11-11: a PEM `[auth.smtp]` names (`--smtp-ca-file`), for a relay on
+     a private CA. For the mail server alone, read on every send; the name is
+     still checked against the URL's host, and a file that does not load
+     refuses the send rather than falling back. The setup page has no field
+     for it. See
+     [`RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md`](RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md).
    - A password inside the URL is refused.
    - **A password mounted for luu stays where it is**:
      `--smtp-password-ref file:/run/secrets/luu/smtp-password` saves
