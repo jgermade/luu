@@ -1,8 +1,7 @@
 <script :setup>
   // Where a session's commands may run: the container runtimes on this
-  // machine, the images they run, and who gets a shell on the host. Postures
-  // are gone from here since 2026-10-30: a session is made from a runtime, an
-  // image and lists. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`
+  // machine, the images they run, and who gets a shell on the host. A
+  // session is made from a runtime, an image and lists. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`
   // and `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
   const [
     { loadRuntimes, probeRuntime, loadTasks, buildImage, installRuntime, startRuntime, stopRuntime, saveImages, saveHostShell, saveDefaultRuntime },
@@ -370,7 +369,7 @@
       </div>
       <div :if="view && !imageNames.length" class="row">
         <dt><span class="dim">none</span></dt>
-        <dd><span class="dim small">the images a policy file or an old posture names are still offered</span></dd>
+        <dd><span class="dim small">a container runtime runs an image named here: add one</span></dd>
       </div>
     </dl>
     <div :if="editing" class="adding image-form">

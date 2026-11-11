@@ -1756,14 +1756,14 @@ test("runtimes, images and the host shell are configured from Settings", async (
   })
   expect(typed.status).toBe(405)
   expect(config()).not.toContain("[posture.")
-  // And so is an image no policy file here names.
+  // And so is an image nothing on this machine names.
   const built = await fetch(`${BASE}/api/runtimes/docker/build`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ image: "somebody/else:latest" }),
   })
   expect(built.status).toBe(400)
-  expect(await built.text()).toContain("nor a policy file here names")
+  expect(await built.text()).toContain("no [image.*] in config.toml names")
   // From source as well as from the release, and from nothing else.
   const fromSource = await fetch(`${BASE}/api/runtimes/docker/build`, {
     method: "POST",

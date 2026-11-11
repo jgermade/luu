@@ -26,7 +26,7 @@ const BASE = `http://127.0.0.1:${PORT}`
  * It **does** declare the network and a domain, which the gate could not show
  * at all until `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`: a plan
  * asking to reach crates.io was approved by a person who was never told it had
- * asked. This session runs under the server's own policy, which grants no
+ * asked. This session is the server's first, on empty lists, which grant no
  * network, so it is also the case where what a plan *asks for* and what it will
  * *get* differ — and the panel has to say so rather than report a grant that
  * does not exist.
@@ -84,23 +84,20 @@ test.beforeAll(async () => {
   // Its own state directory, so the run reads no `config.toml` of the person
   // running it and writes nothing into theirs.
   home = mkdtempSync(join(tmpdir(), "luu-gate-"))
-  // And one posture in it, for the gate's tests to start their sessions on
-  // through the API. The policy file is wider than the server's own in the one
-  // way the page shows — `network` — so "which one is in force" is answerable
-  // from the browser.
-  writeFileSync(
-    join(home, "wide.toml"),
-    '[sandbox]\nnetwork = true\ncommands = ["ls"]\n\n' +
-      '[[sandbox.paths]]\npath = "."\naccess = "read-write"\n',
-  )
-  // A provider as well as the posture: the dialog offers what a session may do
+  // And one list of each axis in it, all called `wide`, for the gate's tests
+  // to start their sessions on through the API. Wider than the empty lists in
+  // the one way the page shows — `network` — so "which is in force" is
+  // answerable from the browser.
+  // A provider as well as the lists: the dialog offers what a session may do
   // beside where it sends, and a session can only be started somewhere this
   // machine has already named.
   writeFileSync(
     join(home, "config.toml"),
     '[provider.here]\nbackend = "mock"\nmodel = "mock"\n\n' +
       '[provider.there]\nbackend = "mock"\nmodel = "mock-there"\n\n' +
-      `[posture.wide]\npolicy = "${join(home, "wide.toml")}"\n`,
+      '[shell.wide]\nallow = ["ls"]\n\n' +
+      '[network.wide]\nallow = ["*"]\n\n' +
+      '[files.wide]\nallow = [{ path = ".", access = "read-write" }]\n',
   )
   server = spawn(
     binary(),
@@ -203,8 +200,8 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(gate.locator(".objective")).toHaveText("say what this repository is")
   await expect(gate.locator(".plan li")).toHaveText(["read the readme"])
   await expect(gate.locator("p", { hasText: "reads:" })).toContainText("AGENTS.md")
-  // What it asks to reach, and what it will actually get: this session took the
-  // server's own policy file, which grants no network at all.
+  // What it asks to reach, and what it will actually get: this session is the
+  // server's first, on empty lists, which grant no network at all.
   const reach = gate.locator("p", { hasText: "network: yes" })
   await expect(reach).toContainText("egress: crates.io")
   await expect(reach).toContainText("the session's policy denies it")
@@ -524,9 +521,6 @@ test("a session is made from where it runs and its lists, and the page says whic
   await page.goto(`${BASE}/index.html`)
   await chooseFolder(page)
 
-  // The server's own policy file was read here from Settings → Models' card
-  // of what this server resolved until 2026-10-26, when the card went; the
-  // dialog below says the same of the session it makes.
   // The "+" in the chat's head. Sessions were a tab strip over the chat
   // column (`RECORD/2026-09-15.a-three-pane-inspector.completed.md`) and before that
   // a `+ New` button beside a dropdown in the page header; one session is on
@@ -535,9 +529,9 @@ test("a session is made from where it runs and its lists, and the page says whic
   const starter = page.getByRole("dialog", { name: "Sessions" })
   await expect(starter).toBeVisible()
 
-  // Nothing to start from — a posture is a name a session gives through the
+  // Nothing to start from — a session is made from lists, and here through the
   // API, as the gate's tests below do. Where it runs, out of what this
-  // machine has, and the lists: none in the file, so the empty one each.
+  // machine has, and the lists: the empty one each, until one is chosen.
   await expect(starter.locator("select.preset")).toHaveCount(0)
   await expect(starter.locator("select.runtime")).toHaveValue("host|")
   // This machine's mark at its start, and beside it what that means, as
@@ -551,8 +545,10 @@ test("a session is made from where it runs and its lists, and the page says whic
   ])
   expect(Math.abs(box.height - beside.height)).toBeLessThan(1)
   expect(Math.abs(box.y - beside.y)).toBeLessThan(1)
+  // The empty list first and chosen, then the file's: `wide`, of each axis.
   for (const kind of ["shell", "network", "files"]) {
-    await expect(starter.locator(`select.list-${kind} option`)).toHaveText(["empty"])
+    await expect(starter.locator(`select.list-${kind} option`)).toHaveText(["empty", "wide"])
+    await expect(starter.locator(`select.list-${kind}`)).toHaveValue("")
   }
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
@@ -1244,7 +1240,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
 })
 
 /**
- * Starts a session on the wide posture and leaves a gate open on it. The two
+ * Starts a session on the wide lists and leaves a gate open on it. The two
  * tests below each want their own, because approving one consumes it.
  *
  * **Its plan is empty, and that is not a shortcut.** A session started on a
@@ -1260,13 +1256,16 @@ test("the editor setting offers Monaco where it is installed and says so where i
  * a person asks for one over the draft.
  */
 async function gateOnWidePosture(page) {
-  // Named through the API: the dialog makes a session from lists, and a
-  // posture is a name a session gives. The provider is named too, so the
-  // session builds its backend out of `config.toml`, as one from the dialog.
+  // Through the API, as the dialog would: a session is made from lists. The
+  // provider is named too, so the session builds its backend out of
+  // `config.toml`, as one from the dialog.
   const started = await fetch(`${BASE}/api/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ posture: "wide", provider: "here" }),
+    body: JSON.stringify({
+      lists: { shell: "wide", network: "wide", files: "wide" },
+      provider: "here",
+    }),
   })
   expect(started.ok, await started.clone().text()).toBe(true)
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -1359,7 +1358,7 @@ test("the gate shows what a plan may reach, and a person narrows it there", asyn
 
   // The plan the job is held to, out of the read API — the assertion that says
   // the amendment left the browser rather than that a button changed colour.
-  // The posture is `wide`, which grants the network and names no domains, so
+  // The network list is `wide`, which allows any host and names no domains, so
   // all three survive `Plan::unmet`.
   const plan = await livePlan(page)
   expect(plan.network).toBe(true)

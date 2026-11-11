@@ -15,7 +15,7 @@
 # An install then asks how luu will run: **local**, for you on this machine,
 # which is everything below; or **online**, for people who log in — Linux with
 # systemd: the binary in /usr/local/bin, a system user `luu` whose home
-# /var/lib/luu is the state directory, a policy in /etc/luu/luu.toml, `luu
+# /var/lib/luu is the state directory, `luu
 # config server` for the origin, luu.service, and a one-time link to finish
 # in the page — mail, and the owner, proved by one code. Each step that
 # needs root runs through sudo where the script is not root already. An online
@@ -43,7 +43,6 @@ SETUP_URL="https://jgermade.github.io/luu/setup.sh"
 # Online: the unit, the service's home (its state directory) and its policy.
 UNIT="/etc/systemd/system/luu.service"
 SERVICE_HOME="/var/lib/luu"
-POLICY="/etc/luu/luu.toml"
 TMP=""
 # `curl` or `wget`: what downloads, and what the lines this prints say to run.
 GET=
@@ -80,7 +79,7 @@ Options:
                    (or LUU_VERSION)
   --purge          With uninstall: also delete luu's state directory, which
                    holds sessions, keys, config.toml, engines and models —
-                   online, /var/lib/luu, the user luu and /etc/luu.
+                   online, /var/lib/luu and the user luu.
   -y, --yes        Do not ask before deleting anything.
   -h, --help       Show this text.
 
@@ -418,24 +417,6 @@ choose_mode() {
 	done
 }
 
-# The policy an online luu's sessions run under: each session's own folder,
-# and the commands most machines have. Written only where there is none.
-policy_text() {
-	cat <<'TOML'
-# The policy `luu serve` runs under as luu.service: each session's own folder
-# (`.`), read and write, and the commands this machine has. Yours to edit;
-# `setup.sh` writes it only where there is none.
-[sandbox]
-enforcement = "kernel"
-network = false
-commands = ["git", "rg", "ls"]
-
-[[sandbox.paths]]
-path = "."
-access = "read-write"
-TOML
-}
-
 unit_text() {
 	cat <<UNIT
 # luu serve, online. Written by setup.sh: see
@@ -450,7 +431,7 @@ User=luu
 Group=luu
 Environment=LUU_HOME=$SERVICE_HOME
 WorkingDirectory=$SERVICE_HOME/work
-ExecStart=$DIR/luu serve --sandbox $POLICY
+ExecStart=$DIR/luu serve
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
@@ -479,13 +460,6 @@ go_online() {
 	as_root mkdir -p "$SERVICE_HOME/work"
 	as_root chown luu:luu "$SERVICE_HOME" "$SERVICE_HOME/work"
 	as_root chmod 0750 "$SERVICE_HOME"
-	if [ ! -f "$POLICY" ]; then
-		policy_text >"$TMP/luu.toml"
-		as_root mkdir -p "$(dirname "$POLICY")"
-		as_root cp "$TMP/luu.toml" "$POLICY"
-		as_root chmod 0644 "$POLICY"
-		say "Wrote $POLICY."
-	fi
 
 	as_luu env LUU_HOME="$SERVICE_HOME" "$DIR/luu" config server \
 		--origin "$ORIGIN" </dev/null >/dev/null || die "luu config server failed"
@@ -617,17 +591,19 @@ uninstall_luu() {
 	if [ "$MODE" = online ]; then
 		if [ "$PURGE" = 0 ]; then
 			say "Kept the service's state (sessions, users, config.toml) in $SERVICE_HOME,"
-			say "the user luu and $POLICY. To delete them as well: $(again uninstall --purge)"
+			say "and the user luu. To delete them as well: $(again uninstall --purge)"
 			return
 		fi
-		say "--purge deletes $SERVICE_HOME (sessions, users, config.toml), the user luu and /etc/luu."
+		say "--purge deletes $SERVICE_HOME (sessions, users, config.toml) and the user luu."
 		if ! confirm "Delete them?"; then
 			say "Nothing deleted."
 			return
 		fi
+		# /etc/luu: the policy file an install wrote before 0.1.17, when a
+		# session stopped reading one.
 		as_root rm -rf "$SERVICE_HOME" /etc/luu
 		if id luu >/dev/null 2>&1; then as_root userdel luu || warn "could not remove the user luu"; fi
-		say "Deleted $SERVICE_HOME, /etc/luu and the user luu."
+		say "Deleted $SERVICE_HOME and the user luu."
 		return
 	fi
 

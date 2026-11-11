@@ -29,7 +29,7 @@ of its strikes.
 
 Narrowed and carried: 49, 50, 51 and 55. Carried, some with a line added: 1,
 3, 4, 7, 12, 13, 16, 21, 28, 29, 30, 35, 36, 37, 39 to 48, 52, 53, 54, 62, 63,
-71 and 72. New rows continue from 73.
+71 and 72. New rows continue from 73 (74, 75 and 76 were added since).
 
 **Numbers are carried, not reassigned.** [`luu-design.md`](../../luu-design.md)
 names item 12 by number, and a number that moves between revisions is a link
@@ -45,6 +45,13 @@ stands* first: it lists what 51 touches and the one question to ask before
 building. After it, what is left without a machine is row 29; everything else
 waits on machine 3 (rows 36, 38 — now with `--fold-behind` arms — 39, 40, 41,
 42 and row 7's run), another machine, an account, a cluster or a decision.
+
+**Since, on `claude/blissful-newton-8knhr5` (2026-11-10): row 51's first
+half.** The question was asked and answered *against* the recommendation —
+the server's own policy file goes too — and built:
+[`a-session-is-a-runtime-and-three-lists`](../../RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md).
+What it leaves is in rows 50, 51 and 76. Without a machine there is now row
+29, row 50's CLI half, and row 51's *Add to the policy*.
 
 ## The calibration finding: the order said A, and the work went to I
 
@@ -143,12 +150,13 @@ in *italics* are in
 | 47 | **The egress proxy, connected**: built and never started | nothing; postponed | *step 2's decisions*, 2 |
 | 48 | **A grant per host, once or for the session** | row 47 | *step 2's decisions*, 2 |
 | 49 | **The seam carries the outcome, not the policy**: `{ cmd, paths, network, limits }`, the files list as mounts, and a files `deny` held. *Narrowed*: the folder as the session's base was built 2026-10-30 ([`sessions-side-by-side`](../../RECORD/2026-10-30.sessions-side-by-side.completed.md) step 3) | nothing | *decided, and where every file lives* §2, §4 |
-| 50 | **The working directory stops deciding**: its `luu.toml` only with `--sandbox`, and `.luu/policy.toml` as a suggestion adopted with its hash. *Narrowed*: `[approvals]` moved to luu's config on 2026-10-30 ([`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) step 4) | nothing | *decided, and where every file lives* §3, §6 |
-| 51 | **Environments and postures go** (decided 2026-11-09, B), and a refusal's *Add to the policy*. *Not started; handed to a new branch and session.* What it touches, and the question to ask first — whether the server's own policy file goes too — are in [`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §*where 51 stands* | the server's own policy file: a question | *decided* §1; [`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §Still open |
+| 50 | **The working directory stops deciding**: its `luu.toml` only with `--sandbox`, and `.luu/policy.toml` as a suggestion adopted with its hash. *Narrowed*: `[approvals]` moved to luu's config on 2026-10-30 ([`a-session-carries-its-policies`](../../RECORD/2026-10-30.a-session-carries-its-policies.completed.md) step 4) *Narrowed again 2026-11-10*: `serve` reads no policy file at all — not `./luu.toml`, and `--sandbox` is refused there. What is left is the one-shots: `luu chat`, `tools`, `map` and `select` naming lists of the instance (`--shell`, `--network`, `--files`) in place of `--sandbox FILE` and `./luu.toml`, and with them every recipe in `AGENTS.md`, `scripts/container-check.sh` and `make-fixtures.sh` | the recipes rewritten with it | *decided, and where every file lives* §3, §6; [`a-session-is-a-runtime-and-three-lists`](../../RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md) §Still open |
+| 51 | ~~**Environments and postures go** (decided 2026-11-09, B)~~ *Built 2026-11-10*, and the server's own policy file with them, as answered: `[posture.*]` and `[environment.*]` do not load, every session of `serve` is a runtime and three lists it copied, the first one included — [`a-session-is-a-runtime-and-three-lists`](../../RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md). **Left**: a refusal's *Add to the policy* | nothing | *decided* §1; [`five-decisions`](../../RECORD/2026-11-09.five-decisions.WIP.md) §51 |
 | ~~52~~ | ~~**Always: a grant for the project**~~ *Built 2026-11-09*: *Always in this project*, in luu's config by folder, listed and taken back in Settings → Policies — [`always-in-this-project`](../../RECORD/2026-11-09.always-in-this-project.completed.md) | ~~a decision~~ | *always is for later* |
 | 53 | **A yes that needs a signature** where `[approvals] required = true` | row 16 | [`a-refused-write-asks`](../../RECORD/2026-10-02.a-refused-write-asks.completed.md) §Still open |
 | ~~54~~ | ~~**The `--allow-*` flags add a second rule for a path, and the first answers**~~ *Done 2026-11-09*, in `Sandbox::new` rather than the flags: one root per path, the greater access. A plan with a file in both `files` and `writes` was read-only by the same defect — [`one-rule-per-path`](../../RECORD/2026-11-09.one-rule-per-path.completed.md) | ~~nothing~~ | *step 2a, built* |
 | 55 | **More than one call in a reply: the count.** Built 2026-10-25. What is left is the grounded scripts under `--tool-calls native`, with tool cards per step | the count | [`more-than-one-call-in-a-reply`](../../RECORD/2026-10-25.more-than-one-call-in-a-reply.completed.md) |
+| 76 | **Where `env` and `limits` live once no file carries them.** A session made from lists has had the default limits and no `env` since 2026-10-23; since 2026-11-10 that is every session of `serve`, a deployment's first one included, which had `TMPDIR` and `CARGO_HOME` from `deploy/luu.toml`. A fourth table, or keys of `[image.*]` | a design argument | [`a-session-is-a-runtime-and-three-lists`](../../RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md) §Still open |
 
 **Section F — the public luu, what is still owed.** Sections F to I of the last
 revision, folded into one now that their plans are built. Each row is a
@@ -194,7 +202,8 @@ gantt
 
 Not on the chart: rows 1, 3, 4, 35 and 75 (a hand on a box), 71 and 74 (an account
 and an authenticator), 62–63 (a cluster), 28 (ordered, deliberately
-unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c).
+unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c) —
+all five since decided, and 21, 51, 52 and 72c built.
 
 ## What actually blocks what
 
@@ -208,8 +217,9 @@ unscheduled), and everything waiting on a decision (21, 30, 51, 52, 72c).
 - ~~**Row 43 is checkout work, and it got more urgent.** Two live sessions now
   each have a floor, and a narrowing left behind by a job that is no longer
   live is easier to reach than it was with one.~~ *Done 2026-11-09.*
-- **Row 51 waits on a decision, not on code**: whether environments survive
-  postures. Building their editor first would decide it by accident.
+- ~~**Row 51 waits on a decision, not on code**: whether environments survive
+  postures. Building their editor first would decide it by accident.~~
+  *Decided 2026-11-09 and built 2026-11-10.*
 - **Section F needs things this repository does not have** (an SMTP account, a
   cluster, an authenticator), except 72(a), 72(b) and 73, which are code —
   and all three were built on 2026-11-09.

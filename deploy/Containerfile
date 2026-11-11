@@ -1,8 +1,8 @@
 # `luu serve` in a container: the server, and the place its tools run.
 #
 # Not the worker image (`/Containerfile`), whose PID 1 is `luu worker` and
-# which a session starts per job. Here the container *is* the sandbox: the
-# policy runs tools on the host side of nothing (`runtime = "host"`), as the
+# which a session starts per job. Here the container *is* the sandbox: a
+# session's tools run on the host side of nothing (runtime `host`), as the
 # user `luu`, inside whatever the container runtime grants — and Landlock still
 # runs inside, where the kernel has it. See
 # RECORD/2026-10-07.a-public-luu.completed.md.
@@ -41,20 +41,19 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 # The rust image again, and not a slim one, on purpose: the agent's tools are
-# what the policy's `commands` names — cargo, git, rg — and a container that
-# lacks them is a policy that says `absent`. A deployment for another language
-# swaps this base and that list together.
+# what a shell list names — cargo, git, rg — and a container that lacks them
+# is a list that says `absent`. A deployment for another language swaps this
+# base.
 FROM rust:1-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ripgrep \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --create-home --home-dir /state --shell /bin/bash luu \
- && mkdir -p /work /etc/luu \
+ && mkdir -p /work \
  && chown luu:luu /state /work
 COPY --from=build /src/target/release/luu /usr/local/bin/luu
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
 COPY --from=web /web/node_modules/@xterm /usr/share/luu/web/node_modules/@xterm
-COPY deploy/luu.toml /etc/luu/luu.toml
 COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
 
 # The state directory (config.toml, sessions.db, the token) and the tree the

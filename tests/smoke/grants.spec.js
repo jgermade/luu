@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
  * it, the card asks, *Allow* with *Apply to session* runs it and lists it, the
  * next draft runs it without asking; taken back, *Deny* for the session
  * refuses it and the next one without asking; lifted, it is asked again.
- * Under an environment out of `config.toml` whose shell list allows `ls` and
+ * Under lists out of `config.toml`, the shell one allowing `ls` and
  * names `git` in neither zone. The Permissions dialog reads the same session
  * back: each call in one of four words, each a link to what decided it, and
  * the answers for the session with what was taken back still listed. See
@@ -43,11 +43,6 @@ allow = ["ls"]
 
 [files.tree]
 allow = [{ path = ".", access = "read-write" }]
-
-[environment.asking]
-shell = "tools"
-network = "off"
-files = "tree"
 `
 
 function binary() {
@@ -101,14 +96,14 @@ test.beforeAll(async () => {
     if (Date.now() > deadline) throw new Error(`luu serve never answered:\n${output}`)
     await new Promise(again => setTimeout(again, 200))
   }
-  // The session runs under the environment, not the checkout's `luu.toml`.
+  // The session is made from the lists above.
   const started = await fetch(`${BASE}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // Only the environment: the destination stays the one the flags set up.
-    body: JSON.stringify({ posture: "asking" }),
+    // Only the lists: the destination stays the one the flags set up.
+    body: JSON.stringify({ lists: { shell: "tools", network: "off", files: "tree" } }),
   })
-  if (!started.ok) throw new Error(`no session on the environment: ${await started.text()}`)
+  if (!started.ok) throw new Error(`no session on the lists: ${await started.text()}`)
 })
 
 test.afterAll(() => {

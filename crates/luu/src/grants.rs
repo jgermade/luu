@@ -296,13 +296,17 @@ mod tests {
 
     fn environment(shell: &str) -> Resolved {
         let text = format!(
-            "{shell}\n[network.n]\n[files.f]\nallow = [{{ path = \".\", access = \"read-write\" }}]\n\
-             [environment.e]\nshell = \"s\"\nnetwork = \"n\"\nfiles = \"f\"\n"
+            "{shell}\n[network.n]\n[files.f]\nallow = [{{ path = \".\", access = \"read-write\" }}]\n"
         );
         crate::provider::Config::from_toml(&text, "config.toml")
             .expect("the test's config")
             .policies()
-            .resolve("e")
+            .compose(
+                &crate::policies::Place::host(),
+                Some("s"),
+                Some("n"),
+                Some("f"),
+            )
             .expect("named")
     }
 
@@ -557,13 +561,17 @@ mod tests {
         let root = scratch("gate");
         let text = "[shell.s]\nallow = [\"ls\"]\ndeny = [\"curl\"]\n\
                     [network.n]\n\
-                    [files.f]\n\
-                    [environment.e]\nshell = \"s\"\nnetwork = \"n\"\nfiles = \"f\"\n";
+                    [files.f]\n";
         let environment = std::sync::Arc::new(
             crate::provider::Config::from_toml(text, "config.toml")
                 .unwrap()
                 .policies()
-                .resolve("e")
+                .compose(
+                    &crate::policies::Place::host(),
+                    Some("s"),
+                    Some("n"),
+                    Some("f"),
+                )
                 .unwrap(),
         );
         let session = Sandbox::new(&environment.policy, &root).unwrap();
@@ -573,7 +581,7 @@ mod tests {
             agent_core::agent::Limits::default(),
             None,
         )
-        .with_environment(environment);
+        .with_composed(environment);
         assert!(
             !agency.sandbox.network(),
             "the session itself reaches nothing"
@@ -604,7 +612,12 @@ mod tests {
             crate::provider::Config::from_toml(&text, "config.toml")
                 .unwrap()
                 .policies()
-                .resolve("e")
+                .compose(
+                    &crate::policies::Place::host(),
+                    Some("s"),
+                    Some("n"),
+                    Some("f"),
+                )
                 .unwrap(),
         );
         let session = Sandbox::new(&denying.policy, &root).unwrap();
@@ -614,7 +627,7 @@ mod tests {
             agent_core::agent::Limits::default(),
             None,
         )
-        .with_environment(denying);
+        .with_composed(denying);
         assert!(!agency.gate_sandbox(&[]).network());
     }
 

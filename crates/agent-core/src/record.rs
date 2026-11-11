@@ -254,8 +254,10 @@ pub const FORMAT: u32 = 29;
 /// tell two recordings apart without copying a policy file into every stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Posture {
-    /// `None` when the run took the server's own policy file rather than a
-    /// posture somebody named in `config.toml`.
+    /// A session of `serve` is named by the lists it copied (`empty`,
+    /// `tools · registries · empty`). `None` for a one-shot's policy file —
+    /// and, in a recording from before 2026-11-10, for a session that took
+    /// the server's own rather than a posture named in `config.toml`.
     ///
     /// Always written, `null` included: *no name* is a fact about the run, and
     /// a reader that has to tell an absent key from an absent posture is one

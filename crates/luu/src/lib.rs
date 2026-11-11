@@ -1986,34 +1986,6 @@ impl SandboxArgs {
             .unwrap_or_else(|| base.join("luu.toml")))
     }
 
-    /// `[approvals]`: who may approve, and whether anyone must sign to — out of
-    /// luu's own `config.toml` since 2026-10-30, and out of the policy file
-    /// only where that has none, said once as it is read: who may approve is
-    /// the operator's, not a project's. A policy file without the block is not
-    /// an error — it is a `luu.toml` from before signatures existed. See
-    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`, step 4.
-    fn approvers(&self) -> Result<Approvers> {
-        if let Ok((config, _)) = crate::provider::Config::load()
-            && let Some(approvers) = config.approvals()
-        {
-            return Ok(approvers.clone());
-        }
-        let path = self.policy_path()?;
-        let from_file = match path.exists() {
-            true => Approvers::from_file(&path)
-                .with_context(|| format!("reading {}", path.display()))?,
-            false => Approvers::default(),
-        };
-        if from_file != Approvers::default() {
-            eprintln!(
-                "warning: [approvals] is read from {} because config.toml has none: it belongs \
-                 in config.toml, where a project cannot set it",
-                path.display()
-            );
-        }
-        Ok(from_file)
-    }
-
     /// The `[worker]` block of a policy file, and the flags over it. A
     /// `luu.toml` from before this existed has no block and resolves to
     /// `host`, which is the run every measurement in this repository was made
@@ -2027,7 +1999,7 @@ impl SandboxArgs {
         Ok(self.worker_over(worker_config))
     }
 
-    /// The flags over a `[worker]` — a policy file's, or an environment's.
+    /// The flags over a `[worker]` — a policy file's, or a session's place.
     fn worker_over(&self, mut worker_config: WorkerConfig) -> WorkerConfig {
         if let Some(runtime) = self.worker {
             worker_config.runtime = runtime;
@@ -2041,114 +2013,41 @@ impl SandboxArgs {
         worker_config
     }
 
-    /// Where a posture would run, **without building it**: the `[worker]`
-    /// block and the flags over it, and whether this machine has the runtime.
+    /// Where a session would run, **without building it**: its runtime and
+    /// image and the flags over them, and whether this machine has the runtime.
     /// Building is what starts a container, and a picker that started one per
     /// option to say what each one is would be a picker that cost a VM boot to
     /// open. An image that is not built is not caught here — that needs the
     /// runtime to answer, and the move itself says so when it is refused. See
     /// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
     ///
-    /// `runtime` is a variant: the same file on another container runtime,
-    /// the way `--worker` moves every posture at once. The caller only asks it
-    /// of a posture that is already contained.
-    pub(crate) fn describe_posture(
+    /// `None` is what `serve` was started on: the flags alone, over this
+    /// machine. `runtime` is a variant: the same place on another container
+    /// runtime, the way `--worker` moves every session at once. The caller
+    /// only asks it of a place that is already contained.
+    pub(crate) fn describe_place(
         &self,
-        policy: Option<&std::path::Path>,
+        composed: Option<&policies::Resolved>,
         runtime: Option<agent_core::worker::Runtime>,
     ) -> serve::Where {
-        let path = match policy {
-            Some(path) => Ok(path.to_path_buf()),
-            None => self.policy_path(),
+        let (named, worker) = match composed {
+            Some(composed) => (format!("lists {}", composed.name), composed.worker.clone()),
+            None => ("serve's own flags".to_string(), WorkerConfig::default()),
         };
-        let shown = |path: &std::path::Path| match path.exists() {
-            true => path.display().to_string(),
-            false => format!("{} (absent: the built-in policy)", path.display()),
-        };
-        let (path, config) = match path {
-            Ok(path) => {
-                let config = self.worker_config(&path).map(|mut config| {
-                    if let Some(runtime) = runtime {
-                        config.runtime = runtime;
-                    }
-                    config
-                });
-                (path, config)
-            }
-            Err(error) => {
-                return serve::Where {
-                    policy: String::new(),
-                    runtime: "host".into(),
-                    image: None,
-                    missing: Some(format!("{error:#}")),
-                    gap: None,
-                };
-            }
-        };
-        match config {
-            Err(error) => serve::Where {
-                policy: shown(&path),
-                runtime: "host".into(),
-                image: None,
-                missing: Some(format!("{error:#}")),
-                gap: None,
-            },
-            Ok(config) => where_of(shown(&path), config),
-        }
-    }
-
-    /// The same, for an environment out of `config.toml`: its runtime and
-    /// image, and the flags over them.
-    pub(crate) fn describe_environment(
-        &self,
-        environment: &policies::Resolved,
-        runtime: Option<agent_core::worker::Runtime>,
-    ) -> serve::Where {
-        let mut config = self.worker_over(environment.worker.clone());
+        let mut config = self.worker_over(worker);
         if let Some(runtime) = runtime {
             config.runtime = runtime;
         }
-        let named = match environment.composed {
-            // Made from lists by name: there is no table to point at.
-            true => format!("lists {}", environment.name),
-            false => format!("[environment.{}]", environment.name),
-        };
         where_of(named, config)
     }
 
-    /// The same resolution, against a policy file a *session* named rather than
-    /// the one this process was started with.
-    ///
-    /// A clone with one field replaced, so every other flag — the extra grants,
-    /// the enforcement override, the worker runtime and image — means what it
-    /// meant, and the rule that an explicit policy file must exist is the same
-    /// rule. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
-    ///
-    /// `runtime` is a variant, as in [`SandboxArgs::describe_posture`]: the
-    /// `--worker` flag, for one session.
-    pub(crate) async fn resolve_posture(
+    /// A session of `serve`: the lists it copied in place of a policy file,
+    /// and every flag over them as it is over a file. `runtime` is a variant,
+    /// as in [`SandboxArgs::describe_place`]: the `--worker` flag, for one
+    /// session.
+    pub(crate) async fn resolve_composed(
         &self,
-        policy: Option<&std::path::Path>,
-        runtime: Option<agent_core::worker::Runtime>,
-    ) -> Result<Agency> {
-        if policy.is_none() && runtime.is_none() {
-            return self.resolve().await;
-        }
-        let mut args = self.clone();
-        if let Some(path) = policy {
-            args.sandbox = Some(path.to_path_buf());
-        }
-        if runtime.is_some() {
-            args.worker = runtime;
-        }
-        args.resolve().await
-    }
-
-    /// The same, for an environment out of `config.toml`: its lists in place
-    /// of a policy file, and every flag over them as it is over a file.
-    pub(crate) async fn resolve_environment(
-        &self,
-        environment: std::sync::Arc<policies::Resolved>,
+        composed: std::sync::Arc<policies::Resolved>,
         runtime: Option<agent_core::worker::Runtime>,
     ) -> Result<Agency> {
         let mut args = self.clone();
@@ -2156,17 +2055,41 @@ impl SandboxArgs {
             args.worker = runtime;
         }
         Ok(args
-            .resolve_from(Some(&environment))
+            .resolve_from(Some(&composed))
             .await?
-            .with_environment(environment))
+            .with_composed(composed))
+    }
+
+    /// `serve` reads no policy file: a session there is made from the lists
+    /// in `config.toml`, and a file named here would be one no session uses.
+    /// See `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
+    pub(crate) fn refuse_a_policy_file(&self) -> Result<()> {
+        match &self.sandbox {
+            None => Ok(()),
+            Some(path) => anyhow::bail!(
+                "--sandbox {}: `serve` reads no policy file. A session is made from the lists \
+                 in config.toml ([shell.*], [network.*], [files.*]), chosen when it starts; \
+                 --worker and --worker-image say where the first one runs",
+                path.display()
+            ),
+        }
+    }
+
+    /// Who may approve, in `serve`: `[approvals]` of luu's own `config.toml`,
+    /// and nothing of a project's.
+    pub(crate) fn approvers_of_config() -> Approvers {
+        crate::provider::Config::load()
+            .ok()
+            .and_then(|(config, _)| config.approvals().cloned())
+            .unwrap_or_default()
     }
 
     async fn resolve(&self) -> Result<Agency> {
         self.resolve_from(None).await
     }
 
-    /// A policy file — the one named, or `luu.toml` where it is — or an
-    /// environment, with the flags over either, built into an agency that
+    /// A policy file — the one named, or `luu.toml` where it is — or a
+    /// session's lists, with the flags over either, built into an agency that
     /// knows which lists it came from.
     async fn resolve_from(&self, environment: Option<&policies::Resolved>) -> Result<Agency> {
         let base = match &self.folder {
@@ -3535,45 +3458,36 @@ pub async fn run() -> Result<()> {
         if let Some(warning) = &warning {
             eprintln!("warning: {warning}");
         }
-        let approvers = sandbox_args.approvers()?;
-        let agency = sandbox_args.resolve().await?;
-        // The postures this machine names, beside the providers and out of the
-        // same file. A config that will not load is not a reason to refuse to
-        // serve: it is already reported where the providers are, and a machine
-        // with none simply offers none.
-        let (postures, environments, postures_path, ui, resend, server, auth_table) =
-            match crate::provider::Config::load() {
-                Ok((config, path)) => (
-                    // Read as environments of the same name: nothing offers a
-                    // posture any more, and a session recorded on one resumes
-                    // on it. See
-                    // `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
-                    {
-                        for name in config.postures().keys() {
-                            eprintln!(
-                                "warning: [posture.{name}] is read as an environment: postures \
-                                 are going, and a new session is made from a runtime and lists"
-                            );
-                        }
-                        std::collections::BTreeMap::<String, crate::provider::Posture>::new()
-                    },
-                    serve::environments_of(&config),
-                    path.map(|path| path.display().to_string()),
-                    config.ui().cloned(),
-                    config.resend().unwrap_or_default(),
-                    config.server(),
-                    config.auth(),
+        sandbox_args.refuse_a_policy_file()?;
+        let approvers = SandboxArgs::approvers_of_config();
+        // The first session, as every one after it: where the flags say, with
+        // three empty lists — it reads its folder and asks the rest.
+        let agency = sandbox_args
+            .resolve_composed(
+                std::sync::Arc::new(
+                    policies::Policies::default()
+                        .compose(&policies::Place::host(), None, None, None)
+                        .map_err(anyhow::Error::msg)?,
                 ),
-                Err(_) => (
-                    Default::default(),
-                    Default::default(),
-                    None,
-                    None,
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                ),
-            };
+                None,
+            )
+            .await?;
+        // A config that will not load is not a reason to refuse to serve: it
+        // is already reported where the providers are.
+        let (ui, resend, server, auth_table) = match crate::provider::Config::load() {
+            Ok((config, _)) => (
+                config.ui().cloned(),
+                config.resend().unwrap_or_default(),
+                config.server(),
+                config.auth(),
+            ),
+            Err(_) => (
+                None,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            ),
+        };
         // `[server]`, under the flags and the `LUU_*` variables. A file that
         // did not load says nothing here, and the address decides as it
         // always has — the stricter reading, not a guess.
@@ -3655,7 +3569,7 @@ pub async fn run() -> Result<()> {
             backend: backend.into(),
             model,
             record,
-            // Read from the same config load the postures came from, and not
+            // Read from the same config load everything else came from, and not
             // a second one: what a run starts under should not change under the
             // surface that is about to offer it.
             budget: budget_under(
@@ -3671,54 +3585,27 @@ pub async fn run() -> Result<()> {
             counter,
             tokenizer,
             agency,
-            // How a session's posture is built, as a function: the same
-            // flags with one field replaced, so every other one means what it
-            // meant. Only `serve` gets it — in `chat` the process is the
-            // session, and its policy file is a flag.
-            // Read once, here: what a session may choose should not change
-            // under the surface that is offering it, which is the rule the
-            // modal's first section states about everything else this run
-            // resolved. A posture added to `config.toml` is offered by the
-            // next run.
-            postures: postures.clone(),
-            environments: environments.clone(),
-            postures_path: postures_path.clone(),
+            // How a session's agency is built, as a function: the same
+            // flags over the lists it copied. Only `serve` gets it — in `chat`
+            // the process is the session, and its policy file is a flag.
             describe_for: Some({
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
                     move |chosen: Option<serve::Chosen>,
                           runtime: Option<agent_core::worker::Runtime>| {
-                        match chosen {
-                            None => args.describe_posture(None, runtime),
-                            Some(serve::Chosen::File(policy)) => {
-                                args.describe_posture(Some(&policy), runtime)
-                            }
-                            Some(serve::Chosen::Environment(environment)) => {
-                                args.describe_environment(&environment, runtime)
-                            }
-                        }
+                        args.describe_place(chosen.as_deref(), runtime)
                     },
                 )
             }),
             agency_for: Some({
                 let args = sandbox_args.clone();
                 std::sync::Arc::new(
-                    move |chosen: Option<serve::Chosen>,
+                    move |chosen: serve::Chosen,
                           runtime: Option<agent_core::worker::Runtime>,
                           folder: Option<std::path::PathBuf>| {
                         let mut args = args.clone();
                         args.folder = folder;
-                        Box::pin(async move {
-                            match chosen {
-                                None => args.resolve_posture(None, runtime).await,
-                                Some(serve::Chosen::File(policy)) => {
-                                    args.resolve_posture(Some(&policy), runtime).await
-                                }
-                                Some(serve::Chosen::Environment(environment)) => {
-                                    args.resolve_environment(environment, runtime).await
-                                }
-                            }
-                        })
+                        Box::pin(async move { args.resolve_composed(chosen, runtime).await })
                             as futures_util::future::BoxFuture<'static, Result<_>>
                     },
                 )
@@ -4569,36 +4456,38 @@ mod tests {
     /// unreachable from a command line. The test pins all of it — including the
     /// half that is a limitation rather than a feature — because a precedence
     /// nobody wrote down is one somebody discovers by being surprised.
-    /// A posture is described by its `[worker]` block without being built,
-    /// and a runtime this machine does not have is named rather than offered.
+    /// A place is described without being built, and a runtime this machine
+    /// does not have is named rather than offered. And `serve` reads no
+    /// policy file.
     #[test]
-    fn a_posture_says_where_it_would_run_without_starting_anything() {
+    fn a_place_says_where_it_would_run_without_starting_anything() {
         #[derive(clap::Parser)]
         struct Line {
             #[command(flatten)]
             sandbox: SandboxArgs,
         }
         use clap::Parser;
-        let dir = std::env::temp_dir().join(format!("luu-describe-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("a directory");
-        let host = dir.join("host.toml");
-        std::fs::write(&host, "[sandbox]\n").expect("a policy file");
-        // Apple's runtime: on no Linux runner and not on this Mac, so absent
-        // wherever this runs today.
-        let apple = dir.join("apple.toml");
-        std::fs::write(
-            &apple,
-            "[worker]\nruntime = \"container\"\nimage = \"luu-worker:dev\"\n",
-        )
-        .expect("a policy file");
-
-        let args = Line::parse_from(["luu", "--sandbox", &host.display().to_string()]).sandbox;
-        let own = args.describe_posture(None, None);
+        let args = Line::parse_from(["luu"]).sandbox;
+        let own = args.describe_place(None, None);
         assert_eq!(own.runtime, "host");
         assert_eq!(own.missing, None, "{own:?}");
-        assert!(own.policy.ends_with("host.toml"), "{own:?}");
+        args.refuse_a_policy_file().expect("none was named");
 
-        let there = args.describe_posture(Some(&apple), None);
+        // Apple's runtime: on no Linux runner and not on this Mac, so absent
+        // wherever this runs today.
+        let apple = policies::Policies::default()
+            .compose(
+                &policies::Place {
+                    runtime: Runtime::Container,
+                    image: Some("luu-worker:dev".into()),
+                    image_paths: Vec::new(),
+                },
+                None,
+                None,
+                None,
+            )
+            .expect("composes");
+        let there = args.describe_place(Some(&apple), None);
         assert_eq!(there.runtime, "container");
         assert_eq!(there.image.as_deref(), Some("luu-worker:dev"));
         if agent_core::worker::which("container").is_none() {
@@ -4611,7 +4500,21 @@ mod tests {
                 "{there:?}"
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
+
+        // The image `serve` was started on is its flags', and nothing else's.
+        let started =
+            Line::parse_from(["luu", "--worker", "docker", "--worker-image", "x:1"]).sandbox;
+        assert_eq!(
+            started.describe_place(None, None).image.as_deref(),
+            Some("x:1")
+        );
+
+        let filed = Line::parse_from(["luu", "--sandbox", "luu.toml"]).sandbox;
+        let refused = filed.refuse_a_policy_file().expect_err("refused");
+        assert!(
+            refused.to_string().contains("reads no policy file"),
+            "{refused}"
+        );
     }
 
     #[test]

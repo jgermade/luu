@@ -67,9 +67,6 @@
     "mail": {
       "type": "object"
     },
-    "policy": {
-      "type": "string"
-    },
     "resources": {
       "type": "object"
     },

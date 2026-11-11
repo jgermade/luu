@@ -19,10 +19,6 @@ spec:
         {{- include "luu.selector" . | nindent 8 }}
         # What a worker pod's affinity finds this one by.
         app.kubernetes.io/component: server
-      {{- if .Values.policy }}
-      annotations:
-        checksum/policy: {{ .Values.policy | sha256sum }}
-      {{- end }}
     spec:
       {{- if include "luu.pods" . }}
       # kubectl's, for a pod per session: see rbac.yaml.
@@ -118,12 +114,6 @@ spec:
               mountPath: /work
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.policy }}
-            - name: policy
-              mountPath: /etc/luu/luu.toml
-              subPath: luu.toml
-              readOnly: true
-            {{- end }}
             {{- if .Values.mail.passwordSecret }}
             # Under /run, which no session's command is granted: not /etc.
             - name: smtp-password
@@ -143,11 +133,6 @@ spec:
             claimName: {{ include "luu.workClaim" . }}
         - name: tmp
           emptyDir: {}
-        {{- if .Values.policy }}
-        - name: policy
-          configMap:
-            name: {{ include "luu.fullname" . }}-policy
-        {{- end }}
         {{- if .Values.mail.passwordSecret }}
         - name: smtp-password
           secret:

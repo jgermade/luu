@@ -16,7 +16,6 @@
 
 import { $reactive } from "@web/vendor/jq79.js"
 import { apiHeaders, socketUrl, refreshSettings, state } from "./store.js"
-import { setPlace } from "./prefs.js"
 
 export const terminal = $reactive({
   /// `{ available, place, reason, posture, xterm }` from `/api/terminal`, or
@@ -220,7 +219,9 @@ export function endTerminal() {
 
 /// Moves a live session that carries its lists to another runtime and image,
 /// its lists, grants and forbiddens as they are — `PUT /api/session/runtime`.
-/// The shell open now ends either way, for `moveSession`'s reason. See
+/// The shell open now ends either way: in a container it goes with the
+/// container, and on this machine it would be a shell somewhere the session
+/// no longer runs. See
 /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 ///
 /// `reinstall` asks the new container for what `install` put in the old one
@@ -248,46 +249,6 @@ export async function moveRuntime(runtime, image, host, reinstall = false) {
         + (again.error ? ` — ${again.error}` : "")
     }
     if (moved) {
-      endTerminal()
-      await refreshSettings()
-    }
-    await loadTerminal()
-    if (host?.isConnected) await attach(host)
-  } catch (e) {
-    terminal.moveError = e.message
-  } finally {
-    terminal.moving = false
-  }
-}
-
-/// Moves the live session to another posture — `""` is the server's own — on
-/// `runtime` where that is a variant (`null` is the posture's own), and opens
-/// the shell again where it now runs.
-///
-/// The server refuses it while a job is open or a proposal waits at the gate,
-/// and says which; that sentence is what the panel shows. The shell that was
-/// open is ended either way the session moved: in a container it is going
-/// with the container, and on this machine it would be a shell somewhere the
-/// session no longer runs.
-export async function moveSession(name, runtime, host) {
-  terminal.moving = true
-  terminal.moveError = null
-  try {
-    const answer = await fetch("./api/session/posture", {
-      method: "PUT",
-      headers: { ...apiHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ posture: name || null, runtime: runtime || null }),
-    })
-    if (!answer.ok) {
-      terminal.moveError = (await answer.text()) || `HTTP ${answer.status}`
-      // Asked again so the picker goes back to where the session still is.
-      await loadTerminal()
-      return
-    }
-    const { moved } = await answer.json()
-    if (moved) {
-      // The next session is offered where this one now runs.
-      setPlace(`${name || ""}|${runtime || ""}`)
       endTerminal()
       await refreshSettings()
     }

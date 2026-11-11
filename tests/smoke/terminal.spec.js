@@ -48,13 +48,18 @@ let scratch = ""
 test.beforeAll(async () => {
   if (!contained) return
   scratch = mkdtempSync(join(tmpdir(), "luu-terminal-"))
-  // One posture besides the server's own, so the panel has somewhere to move
-  // the session: this checkout's `luu.toml`, which runs on the host.
+  // The worker's image, named on this machine, and Docker as where a session
+  // starts: the first one is in a container, and the panel moves it to this
+  // machine and back. No flag names the runtime — `--worker` would move every
+  // place onto it, this machine included.
   mkdirSync(join(scratch, "home"), { recursive: true })
-  writeFileSync(join(scratch, "home/config.toml"), '[posture.host]\npolicy = "luu.toml"\n')
+  writeFileSync(
+    join(scratch, "home/config.toml"),
+    '[image.dev]\nref = "luu-worker:dev"\n\n[runtimes]\ndefault = "docker"\n',
+  )
   server = spawn(
     binary(),
-    ["serve", "--bind", `127.0.0.1:${PORT}`, "--no-store", "--sandbox", "luu.container.toml"],
+    ["serve", "--bind", `127.0.0.1:${PORT}`, "--no-store"],
     // `SHELL`: see `workspace.spec.js` — the host shell, without anybody's rc.
     { cwd: root, env: { ...process.env, LUU_HOME: join(scratch, "home"), SHELL: "/bin/sh" }, stdio: "pipe" },
   )
@@ -152,7 +157,6 @@ test("a terminal opens in the session's container, survives being hidden, and en
     await expect(dialog).toHaveCount(0, { timeout: 30_000 })
   }
   await foot.locator("button.place").click()
-  await expect(place(/^host/).locator(".hint")).toContainText("luu.toml")
   await place(/^host/).click()
   await expect(dialog).toContainText("Its container goes with the move")
   await dialog.getByRole("button", { name: "Cancel" }).click()
@@ -164,7 +168,7 @@ test("a terminal opens in the session's container, survives being hidden, and en
   await expect(rows).toContainText("IN=host")
   // And back, into a container of its own — the first one went with the move.
   await foot.locator("button.place").click()
-  // Every container runtime is offered for the container posture, and the
+  // Every container runtime is offered for the image, and the
   // ones this machine lacks are there, off, saying so.
   for (const runtime of ["podman", "nerdctl", "colima", "container"]) {
     const option = place(`${runtime} · luu-worker:dev`)

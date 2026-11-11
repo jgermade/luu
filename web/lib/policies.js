@@ -1,6 +1,6 @@
 // @ts-check
-/// Settings → Policies, as calls: the shell, network and files lists and the
-/// environments that combine them, read and written whole. The server checks
+/// Settings → Policies, as calls: the shell, network and files lists, read
+/// and written whole. The server checks
 /// what it writes with the loader's own rules and answers with the tables as
 /// they are now. See `put_policies` in `crate::serve` and
 /// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
@@ -23,8 +23,7 @@ async function call(method, body) {
 
 export const loadPolicies = () => call("GET")
 
-/// `{ shell, network, files, environment }`, each a table by name. The
-/// session starter offers the environments, so it is told.
+/// `{ shell, network, files }`, each a table by name.
 export async function savePolicies(tables) {
   const result = await call("PUT", tables)
   if (result.ok) await loadPostures()

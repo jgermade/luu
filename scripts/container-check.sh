@@ -123,9 +123,11 @@ has "$work/command.txt" "[1] ← ok"
 has "$work/command.txt" "held by"
 
 # 6. The whole point of the surface work: a *session* choosing the container,
-#    the way a person does it in the browser — a name in config.toml, a POST,
-#    and a tool call that runs on the far side of the pipe.
-say "a session moved to a container posture, and one started on it"
+#    the way a person does it in the browser — an image and lists in
+#    config.toml, a PUT or a POST, and a tool call that runs on the far side of
+#    the pipe. `serve` reads no policy file: a session is a runtime and three
+#    lists it copied.
+say "a session moved into a container, and one started in it"
 home="$work/home"
 mkdir -p "$home"
 cat > "$home/config.toml" <<TOML
@@ -133,8 +135,14 @@ cat > "$home/config.toml" <<TOML
 backend = "mock"
 model = "mock"
 
-[posture.container]
-policy = "$(pwd)/$policy"
+[image.dev]
+ref = "$image"
+
+[shell.tools]
+allow = ["ls"]
+
+[files.tree]
+allow = [{ path = ".", access = "read-write" }]
 TOML
 
 port=7893
@@ -160,45 +168,46 @@ for waited in $(seq 1 60); do
   sleep 0.5
 done
 
-# It starts on the server's own policy file, which has no container in it.
+# It starts on this machine, with three empty lists.
 curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/before.json"
 python3 -c "
 import json, sys
 before = json.load(open('$work/before.json'))
-assert before['posture'].get('name') is None, before['posture']
+assert before['posture'].get('name') == 'empty', before['posture']
 assert before['posture']['runtime'] == 'host', before['posture']
 print('before:', json.dumps(before['posture']))
 "
 
-# The names the page is offered, and then the session.
+# The places the page is offered — the image, on Docker — and then the session.
 curl -fsS --max-time 10 "http://127.0.0.1:$port/api/postures" >"$work/postures.json"
-grep -q '"container"' "$work/postures.json" || { cat "$work/postures.json"; exit 1; }
+grep -qF "\"$image\"" "$work/postures.json" || { cat "$work/postures.json"; exit 1; }
 
-# The live session *moved* to the container posture, which is what the
-# terminal's picker does: it keeps its backend, and with it the replies above.
-# A session *started* on the posture builds its destination afresh, and a
+# The live session *moved* into the container, which is what the Runtime
+# dialog does: it keeps its lists and its backend, and with it the replies
+# above. A session *started* there builds its destination afresh, and a
 # destination built mid-run has no fixtures (`backend_for`) — so the tool call
 # below ran against the mock's default text, never made a call, and waited out
 # its two minutes. That one is still started, after the call, for its own
 # assertions. The calls that start a container are the only ones here allowed
 # to take seconds; bounded like the rest, because everything this script talks
 # to is a server it started itself.
-curl -fsS --max-time 120 -X PUT "http://127.0.0.1:$port/api/session/posture" \
+curl -fsS --max-time 120 -X PUT "http://127.0.0.1:$port/api/session/runtime" \
   -H 'content-type: application/json' \
-  -d '{"posture":"container","runtime":null}' >/dev/null
+  -d "{\"runtime\":\"docker\",\"image\":\"$image\"}" >/dev/null \
+  || { cat "$work/serve.log"; exit 1; }
 
 curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/after.json"
 python3 -c "
 import json
 after = json.load(open('$work/after.json'))
 posture = after['posture']
-assert posture['name'] == 'container', posture
+assert posture['name'] == 'empty', posture
 assert 'docker' in posture['runtime'], posture
 print('after: ', json.dumps(posture))
 "
 
 # And a tool call under it, over the socket the page uses. This step is the
-# whole ladder in one line: the same prompt on the *host* posture is refused on
+# whole ladder in one line: the same prompt on this machine is refused on
 # a machine without Landlock — "the kernel cannot hold this child" — and it runs
 # here because the container is what provides one. Node is on every
 # GitHub runner and is not a build dependency of this repository, so its absence
@@ -254,15 +263,16 @@ ws.close()
 NODE
 fi
 
-# And a session started on the posture, which is the starter's way there.
+# And a session started there from lists, which is the starter's way.
 curl -fsS --max-time 120 -X POST "http://127.0.0.1:$port/api/sessions" \
   -H 'content-type: application/json' \
-  -d '{"posture":"container"}' >/dev/null || { cat "$work/serve.log"; exit 1; }
+  -d "{\"runtime\":\"docker\",\"image\":\"$image\",\"lists\":{\"shell\":\"tools\",\"files\":\"tree\"}}" \
+  >/dev/null || { cat "$work/serve.log"; exit 1; }
 curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/started.json"
 python3 -c "
 import json
 posture = json.load(open('$work/started.json'))['posture']
-assert posture['name'] == 'container', posture
+assert posture['name'] == 'tools · empty · tree', posture
 assert 'docker' in posture['runtime'], posture
 print('started:', json.dumps(posture))
 "

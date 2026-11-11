@@ -643,22 +643,8 @@ struct App {
     /// How to say where a posture would run without building it. `None`
     /// where `agency_for` is.
     describe_for: Option<DescribeFactory>,
-    /// The postures this machine names: read when the server started, and
-    /// replaced when Settings → Runtimes writes `config.toml`, so a posture
-    /// added there is in the picker at once rather than after a restart. A
-    /// session already on a posture keeps the agency it was built with. See
-    /// `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
-    postures: std::sync::RwLock<std::collections::BTreeMap<String, crate::provider::Posture>>,
-    /// `[environment.<name>]`, resolved when this run started and again each
-    /// time Settings → Policies writes the lists they name — so a list edited
-    /// there is what the next session on it runs under. A session already on
-    /// one keeps the agency it was built with, as with a posture.
-    environments:
-        std::sync::RwLock<std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>>,
     /// `--max-tool-steps`, when it was given. See [`tool_budget`].
     tool_steps: Option<u32>,
-    /// Where those came from, for the page to name.
-    postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
     /// names it or it did not load. Loaded at startup and swapped whole when
     /// Settings writes a new one — see [`put_icon_theme`]. The page follows
@@ -729,14 +715,14 @@ struct App {
     making: Mutex<()>,
 }
 
-/// Given the policy file a session named — or `None` for the server's own — the
+/// Given the place and the lists a session copied, the
 /// agency that is it: the sandbox, the tools, the limits and the worker.
 ///
 /// Boxed because it outlives the call that made it and is shared by every
 /// session, and a function because `serve` should not know what a command line
 /// is. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
-/// Where a posture would run, as the environment picker shows it. See
-/// `SandboxArgs::describe_posture`, which is the only thing that makes one.
+/// Where a session would run, as the runtime picker shows it. See
+/// `SandboxArgs::describe_place`, which is the only thing that makes one.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Where {
     /// The policy file, as this machine spells it.
@@ -754,24 +740,19 @@ pub struct Where {
     pub gap: Option<String>,
 }
 
-/// What a session is built from, by the name it gave: a posture's policy
-/// file, or an environment out of `config.toml`. `None` where one is taken is
-/// the server's own policy file. See [`crate::policies`].
-#[derive(Clone)]
-pub enum Chosen {
-    File(PathBuf),
-    Environment(Arc<crate::policies::Resolved>),
-}
+/// What a session is built from: a place and the three lists it copied. See
+/// [`crate::policies`].
+pub type Chosen = Arc<crate::policies::Resolved>;
 
-/// How the server describes a posture without building it: a policy file or
-/// an environment (`None` is the server's own), on a container runtime other
-/// than the one it names where one is given.
+/// How the server describes where a session would run without building it —
+/// `None` is what `serve` was started on, its flags alone — on a container
+/// runtime other than the one it names where one is given.
 pub type DescribeFactory =
     Arc<dyn Fn(Option<Chosen>, Option<agent_core::worker::Runtime>) -> Where + Send + Sync>;
 
 pub type AgencyFactory = Arc<
     dyn Fn(
-            Option<Chosen>,
+            Chosen,
             Option<agent_core::worker::Runtime>,
             // The session's folder: the sandbox's base. `None` is where
             // `serve` was started.
@@ -1033,15 +1014,6 @@ pub struct AppOptions {
     /// How to say where a posture would run without building it, for the
     /// terminal's environment picker. `None` where `agency_for` is.
     pub describe_for: Option<DescribeFactory>,
-    /// `[posture.<name>]` out of `config.toml`, read once when this run
-    /// started.
-    pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
-    /// `[environment.<name>]` out of the same file, resolved, read at the same
-    /// moment. See [`crate::policies`].
-    pub environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
-    /// Where the file is, for the page to name. `None` on a machine with no
-    /// state directory.
-    pub postures_path: Option<String>,
     /// The icon theme, already loaded. Loaded by the caller rather than here
     /// so that a failure to read it is reported where the other startup
     /// messages are, and so this file does not learn about `config.toml`.
@@ -1168,9 +1140,6 @@ impl App {
             agency,
             agency_for,
             describe_for,
-            postures,
-            environments,
-            postures_path,
             icons,
             temperature,
             seed,
@@ -1243,7 +1212,7 @@ impl App {
                     &model,
                     budget,
                     counter.id(),
-                    Some(agency.posture(None)),
+                    Some(agency.posture(agency.composed().map(|composed| composed.name.clone()))),
                     &authority,
                     provider.tool_calls,
                     started_at,
@@ -1361,10 +1330,7 @@ impl App {
             select_weights,
             agency_for,
             describe_for,
-            postures: std::sync::RwLock::new(postures),
-            environments: std::sync::RwLock::new(environments),
             tool_steps: max_tool_steps,
-            postures_path,
             icons: std::sync::RwLock::new(icons),
             detected: Arc::new(crate::icons::Detected::new(detected_file())),
             brands: std::sync::RwLock::new(None),
@@ -1405,7 +1371,7 @@ impl App {
                 events: broadcast::channel(1024).0,
                 recorder,
                 agency: RwLock::new(agency.clone()),
-                posture: Mutex::new(None),
+                posture: Mutex::new(agency.composed().map(|composed| composed.name.clone())),
                 grants: Default::default(),
                 tools_unlimited: Default::default(),
                 view: Mutex::new({
@@ -1416,7 +1382,9 @@ impl App {
                     // is not built by applying that line, so anything the fold
                     // would take out of it has to be put in by hand or the two
                     // disagree. `tests/store_parity.rs` is what notices.
-                    view.posture = Some(agency.posture(None));
+                    view.posture = Some(
+                        agency.posture(agency.composed().map(|composed| composed.name.clone())),
+                    );
                     view.repeat = Some(budget.repeat);
                     view.prune = Some(budget.prune);
                     view.results = Some(budget.results);
@@ -1437,7 +1405,7 @@ impl App {
                     &model_name,
                     budget,
                     counter_id,
-                    Some(agency.posture(None)),
+                    Some(agency.posture(agency.composed().map(|composed| composed.name.clone()))),
                     &authority,
                     provider.tool_calls,
                     started_at,
@@ -1451,24 +1419,6 @@ impl App {
             current_changed: tokio::sync::watch::channel((None, String::new())).0,
             making: Mutex::new(()),
         }))
-    }
-
-    /// The postures as they are now. A clone, so no lock is held across
-    /// whatever the caller does with them.
-    fn postures(&self) -> std::collections::BTreeMap<String, crate::provider::Posture> {
-        self.postures
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    /// The environments as they are now, for the reason [`App::postures`]
-    /// clones: the resolved lists are behind `Arc`s, so this is cheap.
-    fn environments(&self) -> std::collections::BTreeMap<String, Arc<crate::policies::Resolved>> {
-        self.environments
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
     }
 
     /// A session's repository map and selection walk, over `agency`'s
@@ -1717,15 +1667,6 @@ pub struct ServeOptions {
     /// How to say where a posture would run without building it, for the
     /// terminal's environment picker. `None` where `agency_for` is.
     pub describe_for: Option<DescribeFactory>,
-    /// `[posture.<name>]` out of `config.toml`, read once when this run
-    /// started.
-    pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
-    /// `[environment.<name>]` out of the same file, resolved, read at the same
-    /// moment. See [`crate::policies`].
-    pub environments: std::collections::BTreeMap<String, Arc<crate::policies::Resolved>>,
-    /// Where the file is, for the page to name. `None` on a machine with no
-    /// state directory.
-    pub postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` named, already loaded. Only the
     /// browser surface has one; an `App` with no page gets an empty theme.
     pub icons: Arc<crate::icons::Theme>,
@@ -1874,10 +1815,10 @@ pub async fn serve(options: ServeOptions) -> Result<()> {
 
 /// The first session in `[runtimes] default`, where config.toml names a
 /// container runtime: made as the new session's dialog makes one with nothing
-/// else chosen — that runtime, the first image a posture or an environment
-/// names, and the empty lists — through the same route. Where it cannot run there — the
+/// else chosen — that runtime, the first image this machine names, and the
+/// empty lists — through the same route. Where it cannot run there — the
 /// runtime does not answer, the image is not built — the session stays on
-/// this server's own policy file, and the line says why. In `serve` and not
+/// this machine, and the line says why. In `serve` and not
 /// in [`bind`], which a test calls: a test does not read the `config.toml` of
 /// whoever runs it. See
 /// `RECORD/2026-10-27.a-session-starts-on-the-default-runtime.completed.md`.
@@ -1890,7 +1831,7 @@ async fn start_on_default(state: &AppRouterState) {
         return;
     };
     let app = &state.app;
-    // With no factory to describe them, or no policy files, nothing is chosen.
+    // With no factory to describe them, nothing is chosen.
     let Some(describe) = &app.describe_for else {
         return;
     };
@@ -1900,8 +1841,8 @@ async fn start_on_default(state: &AppRouterState) {
         .find(|place| place.runtime == runtime.as_str() && place.image.is_some())
     else {
         eprintln!(
-            "runtime — this machine: {runtime} is the default, and no posture or environment \
-             in config.toml names an image to run on it"
+            "runtime — this machine: {runtime} is the default, and no [image.*] in config.toml \
+             names an image to run on it"
         );
         return;
     };
@@ -1946,9 +1887,6 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         agency,
         agency_for,
         describe_for,
-        postures,
-        environments,
-        postures_path,
         temperature,
         seed,
         map_tokens,
@@ -2055,9 +1993,6 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         agency,
         agency_for,
         describe_for,
-        postures,
-        environments,
-        postures_path,
         temperature,
         seed,
         map_tokens,
@@ -2280,12 +2215,6 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/runtimes/{runtime}/install", post(install_runtime))
         .route("/api/runtimes/{runtime}/start", post(start_runtime))
         .route("/api/runtimes/{runtime}/stop", post(stop_runtime))
-        // Moves the live session to another posture, between jobs. See
-        // [`put_session_posture`].
-        .route(
-            "/api/session/posture",
-            axum::routing::put(put_session_posture),
-        )
         .route(
             "/api/session/runtime",
             axum::routing::put(put_session_runtime),
@@ -4028,7 +3957,8 @@ async fn save_mail(mail: &crate::mail::Mail) -> Result<(), String> {
 }
 
 /// Says, at startup, every path outside `serve`'s root that a user's
-/// commands could write under the server's own policy: shared by every user,
+/// commands could write under the first session's sandbox — its lists and
+/// the `--allow-*` flags `serve` was started with: shared by every user,
 /// so a channel between them. Said rather than refused — the image's cargo
 /// cache is one — see `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`,
 /// *Still open*.
@@ -5847,7 +5777,7 @@ async fn start_turn(app: Arc<App>, live: Arc<LiveSession>, prompt: String) {
         Authority::Draft(draft) if !app.approvers.required => Some(
             crate::grants::DraftCeiling::new(
                 &agency.sandbox,
-                agency.environment(),
+                agency.composed(),
                 live.grants.clone(),
                 Authority::Person(*draft),
             )
@@ -6315,29 +6245,17 @@ async fn state_home() -> Option<String> {
     .await
 }
 
-/// The postures a session may be started on, as the page offers them.
+/// Where a session may be started, as the page offers it. (The route keeps
+/// the name it had when a session was started on a posture.)
 #[derive(serde::Serialize)]
 struct PosturesView {
-    /// Where the file is, or `None` on a machine with no state directory.
+    /// Where `config.toml` is, or `None` on a machine with no state directory.
     path: Option<String>,
-    /// Where the server's own policy file would run a session: the
-    /// `--sandbox` it was started with, or `luu.toml` where it was started.
-    /// The runtime it names first and, where that is a container, the same
-    /// file on every other container runtime after it.
-    own: Vec<Where>,
-    /// The same for every posture, by name.
-    places: std::collections::BTreeMap<String, Vec<Where>>,
-    /// Whether a session may choose one here at all. False in an `App` built
+    /// Whether a session may choose here at all. False in an `App` built
     /// without an agency factory.
     choosable: bool,
-    /// The posture the live session named, when it named one.
-    running: Option<String>,
-    postures: std::collections::BTreeMap<String, crate::provider::Posture>,
-    /// The environments a session may name, beside the postures: each is in
-    /// `places` too. See [`crate::policies`].
-    environments: Vec<String>,
-    /// Where a session made from lists may run — this machine, and every
-    /// image a posture or an environment names on every container runtime:
+    /// Where a session may run — this machine, and every image an
+    /// `[image.*]` names, or `serve` was started on, on every container runtime:
     /// the new session's *Runtime*. See [`places_for_lists`].
     runtimes: Vec<Where>,
     /// `[runtimes] default`: the container runtime the dialog starts a session
@@ -7211,44 +7129,15 @@ fn variants(describe: &DescribeFactory, policy: Option<Chosen>) -> Vec<Where> {
 }
 
 async fn get_postures(State(state): State<AppRouterState>) -> Response {
-    let live = state.app.addressed();
     let app = &state.app;
     // Files, read on the blocking pool for `blocking`'s reason.
     let runtimes = match &app.describe_for {
         None => Vec::new(),
         Some(describe) => places_for_lists(app, describe).await,
     };
-    let (own, places) = match app.describe_for.clone() {
-        None => (Vec::new(), Default::default()),
-        Some(describe) => {
-            let postures = app.postures();
-            let environments = app.environments();
-            blocking(move || {
-                let variants = |chosen: Option<Chosen>| variants(&describe, chosen);
-                let places = postures
-                    .iter()
-                    .map(|(name, posture)| {
-                        let file = Chosen::File(posture.policy.clone());
-                        (name.clone(), variants(Some(file)))
-                    })
-                    .chain(environments.iter().map(|(name, environment)| {
-                        let chosen = Chosen::Environment(environment.clone());
-                        (name.clone(), variants(Some(chosen)))
-                    }))
-                    .collect();
-                (variants(None), places)
-            })
-            .await
-        }
-    };
     Json(PosturesView {
-        path: app.postures_path.clone(),
-        own,
-        places,
+        path: config_path().await.map(|path| path.display().to_string()),
         choosable: app.agency_for.is_some(),
-        running: live.posture.lock().await.clone(),
-        postures: app.postures(),
-        environments: app.environments().keys().cloned().collect(),
         runtimes,
         default_runtime: load_config()
             .await
@@ -7267,25 +7156,12 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
 // `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
 
 #[derive(serde::Serialize)]
-struct PostureRow {
-    policy: String,
-    place: Option<Where>,
-}
-
-#[derive(serde::Serialize)]
-struct PolicyRow {
-    path: String,
-    place: Option<Where>,
-}
-
-#[derive(serde::Serialize)]
 struct RuntimesView {
     /// Where `config.toml` is, or would be written.
     path: Option<String>,
     editable: bool,
     refused: Option<String>,
-    /// Where an image is built from source, and where a policy file is
-    /// looked for.
+    /// Where an image is built from source.
     base: String,
     /// Whether the base is luu's own checkout, so an image can also be built
     /// from source here, and not only from the release. A project's own
@@ -7298,9 +7174,6 @@ struct RuntimesView {
     /// not. `GET /api/runtimes/{runtime}` asks one.
     runtimes: Vec<crate::runtimes::RuntimeView>,
     tasks: Vec<crate::runtimes::TaskView>,
-    /// The policy files at the top of the checkout, each with where it runs:
-    /// the images they name are built from here.
-    policies: Vec<PolicyRow>,
     /// `[image.<name>]`, which Settings → Runtimes edits.
     images: std::collections::BTreeMap<String, crate::provider::Image>,
     /// `[terminal] host`.
@@ -7310,71 +7183,15 @@ struct RuntimesView {
     default_runtime: Option<&'static str>,
 }
 
-/// The images a runtime is asked about and may build: the ones a policy file
-/// or a posture names. Never one the page types — an image is a thing
-/// somebody wrote into a file here, for the reason a posture is never a path.
-fn images_of<'a>(places: impl Iterator<Item = &'a Option<Where>>) -> Vec<String> {
-    let mut images: Vec<String> = places
-        .flatten()
-        .filter_map(|place| place.image.clone())
+/// The images a runtime is asked about and may build: `config.toml`'s
+/// `[image.*]` and the one `serve` was started on ([`images_named`]). Never
+/// one the page types — an image is a thing somebody wrote on this machine.
+async fn images_here(app: &App) -> Vec<String> {
+    let mut images: Vec<String> = images_named(app)
+        .await
+        .into_iter()
+        .map(|(image, _)| image)
         .collect();
-    images.sort();
-    images.dedup();
-    images
-}
-
-/// The postures and the policy files in `base`, each with where it would run.
-async fn postures_and_policies(
-    app: &App,
-    base: &std::path::Path,
-) -> (
-    std::collections::BTreeMap<String, PostureRow>,
-    Vec<PolicyRow>,
-) {
-    let postures = app.postures();
-    let describe = app.describe_for.clone();
-    let base = base.to_path_buf();
-    blocking(move || {
-        let place =
-            |policy: Option<PathBuf>| describe.as_ref().map(|d| d(policy.map(Chosen::File), None));
-        let postures: std::collections::BTreeMap<_, _> = postures
-            .into_iter()
-            .map(|(name, posture)| {
-                (
-                    name,
-                    PostureRow {
-                        policy: posture.policy.display().to_string(),
-                        place: place(Some(posture.policy.clone())),
-                    },
-                )
-            })
-            .collect();
-        let policies: Vec<_> = crate::runtimes::policy_files(&base)
-            .into_iter()
-            .map(|file| PolicyRow {
-                place: place(Some(base.join(&file.path))),
-                path: file.path,
-            })
-            .collect();
-        (postures, policies)
-    })
-    .await
-}
-
-/// The images a runtime is asked about: `config.toml`'s, and the ones the
-/// postures and the policy files here name.
-fn images_here(
-    declared: &std::collections::BTreeMap<String, crate::provider::Image>,
-    postures: &std::collections::BTreeMap<String, PostureRow>,
-    policies: &[PolicyRow],
-) -> Vec<String> {
-    let mut images = images_of(
-        postures
-            .values()
-            .map(|row| &row.place)
-            .chain(policies.iter().map(|row| &row.place)),
-    );
-    images.extend(declared.values().map(|image| image.reference.clone()));
     images.sort();
     images.dedup();
     images
@@ -7397,12 +7214,11 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
     let live = state.app.addressed();
     let app = &state.app;
     let base = live.agency().await.sandbox.base().to_path_buf();
-    let (postures, policies) = postures_and_policies(app, &base).await;
     let images = declared_images().await;
-    let runtimes = crate::runtimes::seen_all(&images_here(&images, &postures, &policies));
+    let runtimes = crate::runtimes::seen_all(&images_here(app).await);
     let refused = engines_allowed(state, headers).err().map(|_| {
-        "Runtimes are configured from a browser on this machine: a posture is what a session \
-         may do, and a build is a process this machine runs."
+        "Runtimes are configured from a browser on this machine: an image is where a session's \
+         commands run, and a build is a process this machine runs."
             .to_string()
     });
     let config = load_config().await.map(|(config, _)| config).ok();
@@ -7424,7 +7240,6 @@ async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap
         base: base.display().to_string(),
         runtimes,
         tasks: app.tasks.list(),
-        policies,
         images,
         host_shell,
         default_runtime,
@@ -7443,15 +7258,11 @@ async fn get_runtimes(
 /// store has. What the page calls once per installed runtime, each card
 /// filled when its own answer arrives.
 async fn get_runtime(State(state): State<AppRouterState>, Path(runtime): Path<String>) -> Response {
-    let live = state.app.addressed();
     let runtime = match contained(&runtime) {
         Ok(runtime) => runtime,
         Err(refused) => return *refused,
     };
-    let app = &state.app;
-    let base = live.agency().await.sandbox.base().to_path_buf();
-    let (postures, policies) = postures_and_policies(app, &base).await;
-    let images = images_here(&declared_images().await, &postures, &policies);
+    let images = images_here(&state.app).await;
     Json(crate::runtimes::probe(runtime, &images).await).into_response()
 }
 
@@ -7582,42 +7393,13 @@ async fn build_image(
     };
     let app = &state.app;
     let base = live.agency().await.sandbox.base().to_path_buf();
-    // Only an image some file here names.
-    let declared = declared_images().await;
-    let named = {
-        let base = base.clone();
-        let postures = app.postures();
-        let environments = app.environments();
-        let describe = app.describe_for.clone();
-        blocking(move || {
-            let place = |chosen: Chosen| describe.as_ref().map(|d| d(Some(chosen), None));
-            let places: Vec<Option<Where>> = postures
-                .values()
-                .map(|posture| place(Chosen::File(posture.policy.clone())))
-                .chain(
-                    crate::runtimes::policy_files(&base)
-                        .into_iter()
-                        .map(|file| place(Chosen::File(base.join(file.path)))),
-                )
-                .chain(
-                    environments
-                        .values()
-                        .map(|environment| place(Chosen::Environment(environment.clone()))),
-                )
-                .collect();
-            images_of(places.iter())
-        })
-        .await
-    };
-    let declared = declared
-        .values()
-        .any(|image| image.reference == asked.image);
-    if !declared && !named.contains(&asked.image) {
+    // Only an image this machine names.
+    if !images_here(app).await.contains(&asked.image) {
         return (
             StatusCode::BAD_REQUEST,
             format!(
-                "neither an [image.*] in config.toml nor a policy file here names `{}`, so it is \
-                 not one this page builds",
+                "no [image.*] in config.toml names `{}`, and `serve` was not started on it, so \
+                 it is not one this page builds",
                 asked.image
             ),
         )
@@ -10757,36 +10539,12 @@ async fn probe_provider(
     .into_response()
 }
 
-/// Every environment a session may name: `config.toml`'s, resolved, and
-/// each `[posture.<name>]` read as one ([`crate::policies::Resolved::of_posture`])
-/// — so a session recorded on a posture resumes on it, while nothing offers a
-/// posture any more. A posture whose file does not load is left out and said
-/// once, in the log. See
-/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4.
-pub fn environments_of(
-    config: &crate::provider::Config,
-) -> std::collections::BTreeMap<String, Arc<crate::policies::Resolved>> {
-    let mut all: std::collections::BTreeMap<_, _> = config
-        .policies()
-        .resolve_all()
-        .into_iter()
-        .map(|(name, resolved)| (name, Arc::new(resolved)))
-        .collect();
-    for (name, posture) in config.postures() {
-        match crate::policies::Resolved::of_posture(name, &posture.policy) {
-            Ok(resolved) => {
-                all.insert(name.clone(), Arc::new(resolved));
-            }
-            Err(error) => tracing::warn!(target: "luu::session", "{error}"),
-        }
-    }
-    all
-}
-
-/// The lists and the environments that combine them, as `config.toml` has
-/// them: what Settings → Policies shows and edits. See
-/// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+/// The lists, as `config.toml` has them: what Settings → Policies shows and
+/// edits. See `RECORD/2026-10-22.policies-not-postures.WIP.md`. A table that
+/// is not a list — an `environment`, from a page older than this server — is
+/// refused rather than dropped.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct PoliciesTables {
     #[serde(default)]
     shell: std::collections::BTreeMap<String, crate::policies::Zones>,
@@ -10794,16 +10552,12 @@ struct PoliciesTables {
     network: std::collections::BTreeMap<String, crate::policies::Zones>,
     #[serde(default)]
     files: std::collections::BTreeMap<String, crate::policies::FilesList>,
-    #[serde(default)]
-    environment: std::collections::BTreeMap<String, crate::policies::Environment>,
 }
 
 #[derive(serde::Serialize)]
 struct PoliciesView {
     #[serde(flatten)]
     tables: PoliciesTables,
-    /// The postures' names, which an environment may not take.
-    postures: Vec<String>,
     /// Whether the page may write them: not on a server bound off loopback,
     /// for the reason the providers may not be.
     editable: bool,
@@ -10816,9 +10570,7 @@ fn policies_view(config: &crate::provider::Config, editable: bool) -> PoliciesVi
             shell: policies.shell.clone(),
             network: policies.network.clone(),
             files: policies.files.clone(),
-            environment: policies.environments.clone(),
         },
-        postures: config.postures().keys().cloned().collect(),
         editable,
     }
 }
@@ -10831,14 +10583,6 @@ async fn get_policies(State(state): State<AppRouterState>) -> Response {
     Json(policies_view(&config, may_write(&state, Role::Admin))).into_response()
 }
 
-/// Writes the lists and the environments, whole: the page edits a copy and
-/// sends it back. Checked by the loader that reads it, as the providers are —
-/// an environment naming a list that is gone, an entry in two zones, a host
-/// that is not one — and the refusal is the loader's own sentence.
-///
-/// The environments are resolved again from what was written, so the next
-/// session on one runs under the lists as they are now; the live session
-/// keeps the agency it was built with.
 /// What was allowed always, by project folder, and whether this page may take
 /// one back — the policies' own rule, since a grant is a policy a person wrote
 /// by answering.
@@ -10890,6 +10634,12 @@ async fn remove_project_grant(
     get_project_grants(State(state)).await
 }
 
+/// Writes the lists, whole: the page edits a copy and sends it back. Checked
+/// by the loader that reads it, as the providers are — an entry in two zones,
+/// a host that is not one — and the refusal is the loader's own sentence.
+///
+/// A session copies its lists when it starts, so only the next one sees what
+/// was written; the live session keeps its copy.
 async fn put_policies(
     State(state): State<AppRouterState>,
     Json(edit): Json<PoliciesTables>,
@@ -10921,7 +10671,6 @@ async fn put_policies(
         shell: edit.shell,
         network: edit.network,
         files: edit.files,
-        environments: edit.environment,
     });
     if let Err(error) = write_config(config.clone(), path).await {
         return (
@@ -10932,11 +10681,6 @@ async fn put_policies(
         )
             .into_response();
     }
-    *state
-        .app
-        .environments
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = environments_of(&config);
     Json(policies_view(&config, may_write(&state, Role::Admin))).into_response()
 }
 
@@ -11696,18 +11440,17 @@ struct NewSession {
     /// bounded by what somebody wrote on this machine.
     provider: Option<String>,
     model: Option<String>,
-    /// A posture name out of the same file. Never a path, and never a runtime
-    /// and an image, for the same reason `provider` is never a URL. See
-    /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
-    posture: Option<String>,
-    /// The posture on another container runtime — a word out of five, never
-    /// an image. See [`posture_for`]. With `lists` and no posture, where the
-    /// session made from them runs: `host`, or a container runtime.
+    /// Refused: a session was once started on a posture or an environment by
+    /// name, and a client that still names one is told so rather than handed
+    /// a session on empty lists. See [`NewSession::named_posture`].
+    #[serde(default)]
+    posture: Option<serde_json::Value>,
+    /// Where the session runs: `host`, the default, or a container runtime.
     #[serde(default)]
     runtime: Option<String>,
-    /// With `lists` and no posture, the image a container runtime runs: one
-    /// a posture or an environment of this machine names, never one the page
-    /// makes up. The first such where it is absent. See [`place_for`].
+    /// The image a container runtime runs: one this machine names
+    /// ([`images_named`]), never one the page makes up. The first such where
+    /// it is absent. See [`place_for`].
     #[serde(default)]
     image: Option<String>,
     /// The three resend rules, each absent meaning *whatever this server is
@@ -11716,7 +11459,7 @@ struct NewSession {
     /// Named by the header's own words (`always`/`once`, `never`/`behind`,
     /// `kept`/`cited`) so that the request that started a session and the
     /// recording of it say the arm the same way. Bounded by the enum, which is
-    /// the same guard `provider` and `posture` get from being names out of a
+    /// the same guard `provider` gets from being a name out of a
     /// file: what may be asked for is what this machine has.
     ///
     /// Not refused on a resume, deliberately. It was going to be — the posture
@@ -11742,14 +11485,10 @@ struct NewSession {
     /// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
     #[serde(default)]
     authority: Option<crate::provider::AuthorityNotes>,
-    /// One list of each axis, by name out of `config.toml` as `posture` is.
-    /// **With no posture**, what the session is made from, on `runtime` and
-    /// `image` — an absent list is the empty one, which allows nothing and so
-    /// asks about everything: what the new session's dialog sends since
-    /// 2026-10-23 ([`crate::policies::Policies::compose`]). On top of an
-    /// environment, lists in place of some of its own
-    /// ([`crate::policies::Policies::resolve_with`]); on a posture, refused —
-    /// its lists are its policy file.
+    /// One list of each axis, by name out of `config.toml`: what the session
+    /// copies and is made from, on `runtime` and `image`. An absent list is
+    /// the empty one, which allows nothing and so asks about everything
+    /// ([`crate::policies::Policies::compose`]).
     #[serde(default)]
     lists: Option<ListsChoice>,
     /// The folder the session works in, relative to where `serve` was
@@ -11873,165 +11612,60 @@ fn asked_for(body: &axum::body::Bytes) -> Result<NewSession, (StatusCode, String
     }
 }
 
-/// The posture a new session asked for, resolved into the agency that is it.
+/// What a new session asked for — where it runs, and one list of each axis —
+/// resolved into the agency that is it: the lists copied out of `config.toml`
+/// as it is now ([`crate::policies::Policies::compose`]).
 ///
 /// Nothing is swapped here: like the destination, it is built **before**
-/// anything is reset, so a posture whose image is not built or whose runtime is
-/// not installed leaves the session that is running exactly as it was.
+/// anything is reset, so an image that is not built or a runtime that is not
+/// installed leaves the session that is running exactly as it was.
 ///
-/// A session that names none still gets a fresh one, out of the policy file
-/// this server was started with — so a new session picks up an edited
-/// `luu.toml`, and never inherits the container the previous one was using.
-///
-/// `runtime` is a **variant**: the same posture on another container runtime.
-/// It is a name out of a closed set — the five `Runtime::CONTAINED` — and it
-/// replaces the runtime of a posture that is already contained, keeping its
-/// image and its in-image paths; it can never put a contained posture on the
-/// host, nor a host posture in a container. That is how it keeps the rule
-/// [`NewSession::posture`] states, that the browser never types a runtime and
-/// an image: it picks one of five words compiled into luu, and the image is
-/// still the file's. See
-/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+/// A session that names nothing is on this machine with three empty lists: it
+/// reads its folder and asks the rest. There is no file it falls back to. See
+/// `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
 async fn posture_for(
     app: &App,
-    asked: Option<&str>,
     runtime: Option<&str>,
     image: Option<&str>,
     lists: Option<&ListsChoice>,
     folder: Option<&std::path::Path>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
-    let made = asked.is_none().then_some(lists).flatten();
-    let lists = lists.filter(|lists| !lists.is_empty());
     let Some(build) = &app.agency_for else {
-        if made.is_some() || lists.is_some() || image.is_some() {
+        if lists.is_some_and(|lists| !lists.is_empty()) || image.is_some() || runtime.is_some() {
             return Err((
                 StatusCode::CONFLICT,
-                "this surface cannot choose a posture, so not its lists or its image either"
+                "this surface cannot make a session, so not on a runtime, an image or lists \
+                 either: this server was built without a way to make one"
                     .to_string(),
             ));
         }
-        if let Some(runtime) = runtime {
-            return Err((
-                StatusCode::CONFLICT,
-                format!("this surface cannot choose a posture, so not `{runtime}` either"),
-            ));
-        }
-        return match asked {
-            None => {
-                let live = app.current();
-                Ok((live.posture.lock().await.clone(), live.agency().await))
-            }
-            Some(name) => Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "this surface cannot choose a posture, so `{name}` cannot be honoured here: this server was built without a way to make one"
-                ),
-            )),
-        };
+        let live = app.current();
+        return Ok((live.posture.lock().await.clone(), live.agency().await));
     };
-    // No posture and no environment: a session made from where it runs and
-    // one list of each axis, from the file as it is now. Named by its lists,
-    // which is what the record and the page call it.
-    if let Some(lists) = made {
-        let place = place_for(app, runtime, image).await?;
-        let config = load_config()
-            .await
-            .map(|(config, _)| config)
-            .unwrap_or_default();
-        let resolved = config
-            .policies()
-            .compose(
-                &place,
-                lists.shell.as_deref(),
-                lists.network.as_deref(),
-                lists.files.as_deref(),
-            )
-            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-        let name = resolved.name.clone();
-        return finish(
-            app,
-            build,
-            Some(&name),
-            Some(Chosen::Environment(Arc::new(resolved))),
-            None,
-            folder,
+    let place = place_for(app, runtime, image).await?;
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let none = ListsChoice::default();
+    let lists = lists.unwrap_or(&none);
+    let resolved = config
+        .policies()
+        .compose(
+            &place,
+            lists.shell.as_deref(),
+            lists.network.as_deref(),
+            lists.files.as_deref(),
         )
-        .await;
-    }
-    if let Some(image) = image {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!(
-                "an image is chosen with lists and no posture, and `{image}` came with a \
-                 posture: a posture's image is its file's"
-            ),
-        ));
-    }
-    // Other lists than the environment's: resolved from the file as it is
-    // now, with the swap. Never on a posture, whose lists are its file's.
-    if let Some(lists) = lists {
-        let Some(name) = asked.filter(|name| app.environments().contains_key(*name)) else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "lists are chosen on top of an environment, and {} is not one: \
-                     a posture's lists are its policy file",
-                    asked.map(|name| format!("`{name}`")).unwrap_or_default(),
-                ),
-            ));
-        };
-        let config = load_config()
-            .await
-            .map(|(config, _)| config)
-            .unwrap_or_default();
-        let resolved = config
-            .policies()
-            .resolve_with(
-                name,
-                lists.shell.as_deref(),
-                lists.network.as_deref(),
-                lists.files.as_deref(),
-            )
-            .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-        return finish(
-            app,
-            build,
-            asked,
-            Some(Chosen::Environment(Arc::new(resolved))),
-            runtime,
-            folder,
-        )
-        .await;
-    }
-    // A name is a posture's or an environment's — never both, which loading
-    // the file refuses — so the order they are looked in decides nothing.
-    let policy = match asked {
-        None => None,
-        Some(name) => match (app.postures().get(name), app.environments().get(name)) {
-            (Some(posture), _) => Some(Chosen::File(posture.policy.clone())),
-            (None, Some(environment)) => Some(Chosen::Environment(environment.clone())),
-            (None, None) => {
-                let where_from = app
-                    .postures_path
-                    .clone()
-                    .unwrap_or_else(|| "config.toml".to_string());
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "there is no [posture.{name}] nor [environment.{name}] in {where_from}"
-                    ),
-                ));
-            }
-        },
-    };
-    finish(app, build, asked, policy, runtime, folder).await
+        .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    finish(app, build, Arc::new(resolved), folder).await
 }
 
 /// A stored session made from lists, made again from the lists it copied:
 /// on the runtime and image the body names, else the ones it ran on. `None`
-/// where there is nothing to make it from — a posture or an environment of
-/// the file, a stream from before format 26, a surface that cannot choose —
-/// and the caller resolves the body as before.
+/// where there is nothing to make it from — a policy file's session, a
+/// stream from before format 26, a surface that cannot choose —
+/// and the caller says so.
 async fn posture_from_copy(
     app: &App,
     stored: &record::Posture,
@@ -12054,26 +11688,15 @@ async fn posture_from_copy(
         Err(refused) => return Some(Err(refused)),
     };
     let resolved = crate::policies::Policies::recompose(&place, lists)?;
-    let name = resolved.name.clone();
-    Some(
-        finish(
-            app,
-            build,
-            Some(&name),
-            Some(Chosen::Environment(Arc::new(resolved))),
-            None,
-            folder,
-        )
-        .await,
-    )
+    Some(finish(app, build, Arc::new(resolved), folder).await)
 }
 
 /// Where a session made from lists runs: `host` where nothing is said, a
-/// runtime with no container as it is, and a container runtime on an image a
-/// posture or an environment of this machine names — with that file's
-/// in-image paths, since a toolchain the image keeps is the file's to say.
-/// The page picks out of [`places_for_lists`]; it never names an image of its
-/// own, for the reason [`NewSession::posture`] gives.
+/// runtime with no container as it is, and a container runtime on an image
+/// this machine names ([`images_named`]) — with its in-image paths, since a
+/// toolchain the image keeps is its table's to say. The page picks out of
+/// [`places_for_lists`]; it never names an image of its own: what may be
+/// chosen is bounded by what somebody wrote on this machine.
 async fn place_for(
     app: &App,
     runtime: Option<&str>,
@@ -12111,76 +11734,46 @@ async fn place_for(
             StatusCode::BAD_REQUEST,
             match image {
                 Some(image) => format!(
-                    "no [image.*], posture or environment in config.toml names the image \
-                     `{image}`, and a session runs only on an image this machine names"
+                    "no [image.*] in config.toml names the image `{image}`, and a session \
+                     runs only on an image this machine names"
                 ),
-                None => format!(
-                    "`{runtime}` runs an image, and no [image.*], posture or environment in \
-                     config.toml names one"
-                ),
+                None => {
+                    format!("`{runtime}` runs an image, and no [image.*] in config.toml names one")
+                }
             },
         )),
     }
 }
 
-/// The images a session made from lists may run in, each once, with its
-/// in-image paths: `config.toml`'s `[image.<name>]` first, by name, and then
-/// any other image a posture or an environment still names — until postures
-/// go (`RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4).
-/// A posture's file that does not load names nothing here; choosing it says
-/// why.
+/// The images a session may run in, each once, with its in-image paths:
+/// `config.toml`'s `[image.<name>]`, by name.
 ///
-/// **And the one `serve` was started on**: `--worker-image`, or its own
-/// policy file's `[worker] image`. Whoever started the server named it, as
-/// surely as a table would — and the flag moves every place this server
-/// offers onto it, so leaving it out refused the offer the page had just been
-/// made. The Helm chart starts `serve` exactly so, and a cluster has no
-/// other image. See `RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`.
+/// **And the one `serve` was started on**: `--worker-image`. Whoever started
+/// the server named it, as surely as a table would — and the flag moves every
+/// place this server offers onto it, so leaving it out refused the offer the
+/// page had just been made. The Helm chart starts `serve` exactly so, and a
+/// cluster has no other image. Its in-image paths are an `[image.*]`'s where
+/// one names the same reference, and none otherwise. See
+/// `RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`.
 async fn images_named(app: &App) -> Vec<(String, Vec<agent_core::sandbox::PathRule>)> {
-    let postures = app.postures();
-    let environments = app.environments();
-    let declared = declared_images().await;
-    let own = app.describe_for.clone();
-    blocking(move || {
-        let from_files = postures.values().filter_map(|posture| {
-            agent_core::worker::WorkerConfig::from_file(&posture.policy).ok()
-        });
-        let from_environments = environments
-            .values()
-            .map(|environment| environment.worker.clone());
-        let mut named: Vec<(String, Vec<agent_core::sandbox::PathRule>)> = declared
-            .into_values()
-            .map(|image| (image.reference, image.paths))
-            .collect();
-        for worker in from_files.chain(from_environments) {
-            let Some(image) = worker.image.filter(|_| worker.runtime.is_contained()) else {
-                continue;
-            };
-            if !named.iter().any(|(there, _)| *there == image) {
-                named.push((image, worker.paths));
-            }
+    let mut named: Vec<(String, Vec<agent_core::sandbox::PathRule>)> = declared_images()
+        .await
+        .into_values()
+        .map(|image| (image.reference, image.paths))
+        .collect();
+    if let Some(describe) = app.describe_for.clone() {
+        let started = blocking(move || describe(None, None)).await;
+        let contained = started
+            .runtime
+            .parse::<agent_core::worker::Runtime>()
+            .is_ok_and(|runtime| runtime.is_contained());
+        if let Some(image) = started.image.filter(|_| contained)
+            && !named.iter().any(|(there, _)| *there == image)
+        {
+            named.push((image, Vec::new()));
         }
-        if let Some(describe) = own {
-            let started = describe(None, None);
-            let contained = started
-                .runtime
-                .parse::<agent_core::worker::Runtime>()
-                .is_ok_and(|runtime| runtime.is_contained());
-            if let Some(image) = started.image.filter(|_| contained)
-                && !named.iter().any(|(there, _)| *there == image)
-            {
-                // Its in-image paths are its own file's, where it has one.
-                let paths = agent_core::worker::WorkerConfig::from_file(std::path::Path::new(
-                    &started.policy,
-                ))
-                .map(|worker| worker.paths)
-                .unwrap_or_default();
-                named.push((image, paths));
-            }
-        }
-        named
-    })
-    .await
+    }
+    named
 }
 
 /// How many tool calls a turn on `destination` may make before it asks
@@ -12203,7 +11796,7 @@ async fn tool_budget(app: &App, destination: &Destination) -> u32 {
         .unwrap_or(agent_core::agent::DEFAULT_MAX_STEPS)
 }
 
-/// Every place a session made from lists may run, as [`Where`]s: this
+/// Every place a session may run, as [`Where`]s: this
 /// machine, and each image [`images_named`] finds on every container runtime
 /// — the default one first (`[runtimes] default`; Docker first where the file
 /// names none, and this machine is the default). What the new session's
@@ -12228,7 +11821,7 @@ async fn places_for_lists(app: &App, describe: &DescribeFactory) -> Vec<Where> {
     let describe = describe.clone();
     let places: Vec<_> = places
         .filter_map(|place| empty.compose(&place, None, None, None).ok())
-        .map(|resolved| Chosen::Environment(Arc::new(resolved)))
+        .map(Arc::new)
         .collect();
     blocking(move || {
         places
@@ -12250,66 +11843,27 @@ async fn places_for_lists(app: &App, describe: &DescribeFactory) -> Vec<Where> {
 }
 
 /// The rest of [`posture_for`], once what the session is built from is known:
-/// the runtime variant checked against it, and the agency built.
+/// the agency built, named by its lists, and held to a user's folder.
 async fn finish(
     app: &App,
     build: &AgencyFactory,
-    asked: Option<&str>,
-    policy: Option<Chosen>,
-    runtime: Option<&str>,
+    composed: Chosen,
     folder: Option<&std::path::Path>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
-    let runtime = match runtime {
-        None => None,
-        Some(text) => {
-            let runtime = text
-                .parse::<agent_core::worker::Runtime>()
-                .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
-            if !runtime.is_contained() {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "`{runtime}` is not a container runtime: a variant moves a contained \
-                         posture between runtimes, and a posture that runs on the host is \
-                         chosen by its own name"
-                    ),
-                ));
-            }
-            let declared = app
-                .describe_for
-                .as_ref()
-                .map(|describe| describe(policy.clone(), None).runtime);
-            let contained = declared
-                .as_deref()
-                .and_then(|declared| declared.parse::<agent_core::worker::Runtime>().ok())
-                .is_some_and(|declared| declared.is_contained());
-            if !contained {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "posture {} runs on {}, and only a contained posture moves to another \
-                         container runtime: its sandbox names paths on this machine, not in an image",
-                        asked.unwrap_or("(the server's own)"),
-                        declared.as_deref().unwrap_or("an unknown runtime"),
-                    ),
-                ));
-            }
-            Some(runtime)
-        }
-    };
-    let agency = build(policy, runtime, folder.map(std::path::Path::to_path_buf))
+    let name = composed.name.clone();
+    let agency = build(composed, None, folder.map(std::path::Path::to_path_buf))
         .await
         .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error:#}")))?;
     if let Some(who) = who() {
         confined(&app.root, &who.id, &agency)?;
     }
-    Ok((asked.map(str::to_string), Arc::new(agency)))
+    Ok((Some(name), Arc::new(agency)))
 }
 
 /// Refuses a user's agency that reaches past their folder: a granted path
 /// that holds `serve`'s root — every user's folder at once — or one under
 /// the root and outside `<root>/<user id>`. **A check on the policy, not a
-/// policy**: whatever the file grants, this is what a user's session may not
+/// policy**: whatever the lists grant, this is what a user's session may not
 /// have. Paths outside the root are the deployment's, and shared; `serve`
 /// names the writable ones when it starts. See
 /// `RECORD/2026-11-03.a-user-a-code-and-a-folder.completed.md`, *the wall the
@@ -12688,9 +12242,11 @@ async fn new_session(
         Ok(folder) => folder,
         Err((status, message)) => return Err(Box::new((status, message).into_response())),
     };
+    if let Some(refused) = asked.named_posture() {
+        return Err(Box::new(refused.into_response()));
+    }
     let (posture_name, agency) = match posture_for(
         app,
-        asked.posture.as_deref(),
         asked.runtime.as_deref(),
         asked.image.as_deref(),
         asked.lists.as_ref(),
@@ -12997,6 +12553,38 @@ async fn post_folders(
     }
 }
 
+impl NewSession {
+    /// The refusal for a body that names a posture, when it does.
+    fn named_posture(&self) -> Option<(StatusCode, String)> {
+        self.posture
+            .as_ref()
+            .filter(|named| !named.is_null())
+            .map(|named| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "`posture: {named}`: a session is not started by name. It is made from \
+                         `runtime`, `image` and `lists` (one of [shell.*], [network.*] and \
+                         [files.*] in config.toml, each optional)"
+                    ),
+                )
+            })
+    }
+}
+
+/// The refusal for a session that carries no copy of its lists: there is
+/// nothing to make it again from.
+fn no_copy(which: &str) -> (StatusCode, String) {
+    (
+        StatusCode::CONFLICT,
+        format!(
+            "{which} carries no copy of its lists — it ran under a policy file, or before \
+             sessions copied them — so there is nothing to make it again from. It can be read \
+             and exported; start a new session to go on"
+        ),
+    )
+}
+
 /// `PUT /api/session/folder`.
 #[derive(serde::Deserialize)]
 struct MoveFolder {
@@ -13005,7 +12593,7 @@ struct MoveFolder {
 }
 
 /// Moves a session to another folder **before its first turn**: its agency
-/// made again over that tree — the same lists or posture, the same runtime —
+/// made again over that tree — the same lists, the same runtime —
 /// with its repository map and selection walk. After its first turn its
 /// history is about the tree it worked in, and another folder is another
 /// session. See `RECORD/2026-10-30.sessions-side-by-side.completed.md` §5.
@@ -13044,21 +12632,13 @@ async fn put_session_folder(
         )
             .into_response();
     }
-    // The same lists where it carries them; else the posture by its name, or
-    // the server's own file where it has none.
+    // The same lists, which it carries.
     let built = match posture_from_copy(app, &current, None, None, folder.as_deref()).await {
         Some(built) => built,
-        None => {
-            posture_for(
-                app,
-                current.name.as_deref(),
-                None,
-                None,
-                None,
-                folder.as_deref(),
-            )
-            .await
+        None if current.lists.is_none() => {
+            posture_for(app, None, None, None, folder.as_deref()).await
         }
+        None => Err(no_copy("this session")),
     };
     let (name, agency) = match built {
         Ok(built) => built,
@@ -13289,110 +12869,11 @@ async fn end_live(State(state): State<AppRouterState>, Path(id): Path<String>) -
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// `PUT /api/session/posture`: `null` is the server's own policy file.
-#[derive(serde::Deserialize)]
-struct MovePosture {
-    #[serde(default)]
-    posture: Option<String>,
-    /// A variant: see [`posture_for`].
-    #[serde(default)]
-    runtime: Option<String>,
-}
-
-/// Moves the live session to another posture: where its commands run, and
-/// what they may do.
-///
-/// **Between jobs, and in writing.** What went wrong when a posture moved
-/// under a session was something approved under one being carried into
-/// another, and a move the stream did not record — see
-/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`. So a
-/// move is refused while a turn runs, a proposal waits at the gate, or an
-/// approved job is open, and it writes a header line carrying the new posture:
-/// the fold's *last header wins* already means "from here on, this ran
-/// somewhere else". A draft is not a refusal: it runs under its posture's
-/// floor, which grants nothing to carry. See
-/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
-async fn put_session_posture(
-    State(state): State<AppRouterState>,
-    Json(asked): Json<MovePosture>,
-) -> Response {
-    let app = &state.app;
-    let live = app.addressed();
-    // Held for the whole move, so a turn cannot start between the check and
-    // the swap. Nothing below takes it.
-    let session = live.session.lock().await;
-    if session.current.is_some() {
-        return (
-            StatusCode::CONFLICT,
-            "a turn is running: the session moves between turns",
-        )
-            .into_response();
-    }
-    if session.pending.is_some() {
-        return (
-            StatusCode::CONFLICT,
-            "a proposal is waiting at the gate, asked under this posture: approve or decline it, \
-             and the session moves after",
-        )
-            .into_response();
-    }
-    let approved = session.context.live_job().filter(|job| {
-        session
-            .context
-            .job(*job)
-            .is_some_and(|job| job.plan.is_some())
-    });
-    if let Some(job) = approved {
-        return (
-            StatusCode::CONFLICT,
-            format!(
-                "job {job} is open, and it was approved under this posture: close it, and the \
-                 session moves between jobs"
-            ),
-        )
-            .into_response();
-    }
-
-    let current_folder = live.agency().await.sandbox.base().to_path_buf();
-    let current = live
-        .agency()
-        .await
-        .posture(live.posture.lock().await.clone());
-    // Built before anything is swapped, `create_session`'s discipline: a
-    // runtime that is not installed refuses the move and leaves the session
-    // where it was.
-    let (name, agency) = match posture_for(
-        app,
-        asked.posture.as_deref(),
-        asked.runtime.as_deref(),
-        // Moved from the terminal: a preset as it is.
-        None,
-        None,
-        // In the folder it works in: a move changes where commands run, not
-        // which tree they run over.
-        Some(current_folder.as_path()),
-    )
-    .await
-    {
-        Ok(resolved) => resolved,
-        Err((status, message)) => return (status, message).into_response(),
-    };
-    let posture = agency.posture(name.clone());
-    if current.same_place(&posture) && current.name == posture.name {
-        if !Arc::ptr_eq(&agency, &live.agency().await) {
-            agency.shutdown().await;
-        }
-        return Json(serde_json::json!({ "posture": posture, "moved": false })).into_response();
-    }
-
-    Json(settle_move(app, &live, session, name, agency, posture).await).into_response()
-}
-
 /// The rest of a live move, once what it moves to is built and the session's
 /// lock is held: the agency swapped, the old one ended, and a header line
 /// written so *last header wins* says from where on the session ran
-/// somewhere else. Shared by [`put_session_posture`] and
-/// [`put_session_runtime`].
+/// somewhere else. What [`put_session_runtime`] and [`put_session_folder`]
+/// end in.
 async fn settle_move(
     app: &App,
     live: &LiveSession,
@@ -13527,15 +13008,12 @@ async fn reinstall(agency: &Agency, packages: &[String]) -> serde_json::Value {
 ///
 /// **It waits for a turn and for the gate**, because a command in flight has
 /// to finish somewhere, and a proposal waiting there was drawn where the
-/// session is now. **It does not wait for an approved job** — the refusal
-/// [`put_session_posture`] keeps — because that refusal is about a policy
-/// moving with the place, and here the policy does not move. What a move can
+/// session is now. **It does not wait for an approved job**: a job was
+/// approved against a policy, and here the policy does not move. What a move can
 /// change is what holds the lists, and the picker says so beforehand
 /// ([`Where::gap`]) rather than refusing.
 ///
-/// A session with no copy — one on a posture or the server's own policy
-/// file, or resumed from before format 26 — is refused, naming the route that
-/// moves it.
+/// A session with no copy — a test's hand-built agency — is refused.
 async fn put_session_runtime(
     State(state): State<AppRouterState>,
     Json(asked): Json<MoveRuntime>,
@@ -13572,12 +13050,7 @@ async fn put_session_runtime(
         .as_ref()
         .filter(|lists| lists.copied.is_some())
     else {
-        return (
-            StatusCode::CONFLICT,
-            "this session runs under a policy file, not lists it carries: it moves by its \
-             posture's name (PUT /api/session/posture)",
-        )
-            .into_response();
+        return no_copy("this session").into_response();
     };
     let place = match place_for(app, Some(&asked.runtime), asked.image.as_deref()).await {
         Ok(place) => place,
@@ -13590,13 +13063,10 @@ async fn put_session_runtime(
         )
             .into_response();
     };
-    let name = resolved.name.clone();
     let (name, agency) = match finish(
         app,
         build,
-        Some(&name),
-        Some(Chosen::Environment(Arc::new(resolved))),
-        None,
+        Arc::new(resolved),
         // The folder it works in, as it was: a runtime moves, the tree does not.
         Some(leaving.sandbox.base()),
     )
@@ -13763,15 +13233,21 @@ async fn resume_session(
         })
         // A user's root is their folder, and never `serve`'s.
         .or_else(|| folder_under_root(app, None).ok().flatten());
-    let copied = match (&asked.posture, &asked.lists, &loaded_view.posture) {
+    if let Some(refused) = asked.named_posture() {
+        return refused.into_response();
+    }
+    let resolved = match (&asked.lists, &loaded_view.posture) {
         // A live session moving keeps what runs it: nothing is built, and
         // nothing that runs its tools is ended.
-        _ if moving.is_some() => Some(Ok((
+        _ if moving.is_some() => Ok((
             previous.posture.lock().await.clone(),
             previous.agency().await,
-        ))),
-        (None, None, Some(stored)) => {
-            posture_from_copy(
+        )),
+        // Made again from the lists it copied. One that names lists and has
+        // no copy of them — recorded under a policy file, or before format
+        // 26 — is read and not resumed: nothing here says what it could do.
+        (None, Some(stored)) => {
+            match posture_from_copy(
                 app,
                 stored,
                 asked.runtime.as_deref(),
@@ -13779,15 +13255,30 @@ async fn resume_session(
                 folder.as_deref(),
             )
             .await
+            {
+                Some(built) => built,
+                // A stream that names no lists at all — from before they
+                // were recorded, or a surface that makes no session — says
+                // nothing to hold it to, and is let through as unknown, the
+                // way `same_place` reads it.
+                None if stored.lists.is_none() => {
+                    posture_for(
+                        app,
+                        asked.runtime.as_deref(),
+                        asked.image.as_deref(),
+                        None,
+                        folder.as_deref(),
+                    )
+                    .await
+                }
+                None => Err(no_copy(&format!("session {id}"))),
+            }
         }
-        _ => None,
-    };
-    let resolved = match copied {
-        Some(resolved) => resolved,
-        None => {
+        // Lists named in the body, or a stream from before format 10, which
+        // says nothing of where it ran.
+        _ => {
             posture_for(
                 app,
-                asked.posture.as_deref(),
                 asked.runtime.as_deref(),
                 asked.image.as_deref(),
                 asked.lists.as_ref(),
@@ -14433,10 +13924,7 @@ mod tests {
             // no factory gets, and the route says so rather than pretending.
             agency_for: None,
             describe_for: None,
-            postures: Default::default(),
-            environments: Default::default(),
             tool_steps: None,
-            postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             detected: Arc::new(crate::icons::Detected::new(None)),
             brands: std::sync::RwLock::new(None),

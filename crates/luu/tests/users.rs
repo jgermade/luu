@@ -89,9 +89,6 @@ async fn public_server(dir: &Path, grant: &Path) -> String {
             Box::pin(async move { Ok(agency(&policy, &base)) })
         })),
         describe_for: None,
-        postures: Default::default(),
-        environments: Default::default(),
-        postures_path: None,
     })
     .await
     .expect("binding the server");

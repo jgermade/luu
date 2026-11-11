@@ -1,5 +1,5 @@
-//! What a session may do, as lists by axis — shell, network, files — and the
-//! environments that combine them, in `config.toml` beside the providers.
+//! What a session may do, as lists by axis — shell, network, files — in
+//! `config.toml` beside the providers.
 //!
 //! See `RECORD/2026-10-22.policies-not-postures.WIP.md`. **Two zones.** A
 //! list's `allow` is what the session's sandbox grants, exactly as a policy
@@ -19,68 +19,37 @@
 //!
 //! [files.project]
 //! allow = [{ path = ".", access = "read-write" }]
-//!
-//! [environment.container]
-//! runtime = "docker"
-//! image   = "luu-worker:dev"
-//! shell   = "rust"
-//! network = "registries"
-//! files   = "project"
 //! ```
 //!
-//! A `[posture.<name>]` is read as an environment too: its file's `[sandbox]`
-//! with everything in `allow`, which is what a posture has always meant. Both
-//! are recorded the same way — each list by its name and the SHA-256 of what
-//! it holds — so a resume compares what a session could do, not what it was
-//! called.
+//! **A session is a runtime and one list of each axis, copied.** The lists
+//! are the instance's — this file's — and a session takes the ones a person
+//! chose, whole, into its own header ([`Policies::compose`],
+//! [`Policies::recompose`]). Nothing names a combination: `[environment.*]`
+//! and `[posture.*]` are gone, and a `config.toml` that still has one does
+//! not load. See
+//! `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
 
 use std::collections::BTreeMap;
 
 use agent_core::record::{Copied, Hashed, Lists};
-use agent_core::sandbox::{Enforcement, Limits, PathRule, SandboxPolicy};
+use agent_core::sandbox::{PathRule, SandboxPolicy};
 use agent_core::worker::{Runtime, WorkerConfig};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 pub use agent_core::record::{FilesList, Zones};
 
-/// One list of each kind, where they run, and what holds them there.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Environment {
-    /// `host` by default, as a policy file's `[worker]` is.
-    #[serde(default)]
-    pub runtime: Runtime,
-    /// The image, for the runtimes that take one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    /// Trees that exist only inside the image — its toolchain — which the host
-    /// must not try to resolve. A policy file's `[[worker.paths]]`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub image_paths: Vec<PathRule>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    pub shell: String,
-    pub network: String,
-    pub files: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enforcement: Option<Enforcement>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limits: Option<Limits>,
-}
-
-/// Every list and environment `config.toml` names.
+/// Every list `config.toml` names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Policies {
     pub shell: BTreeMap<String, Zones>,
     pub network: BTreeMap<String, Zones>,
     pub files: BTreeMap<String, FilesList>,
-    pub environments: BTreeMap<String, Environment>,
 }
 
-/// Where a composed session runs: a runtime and, in a container, the image
-/// and the trees that exist only inside it — taken from a posture or an
-/// environment that names the image, never typed by a page. See
+/// Where a session runs: a runtime and, in a container, the image and the
+/// trees that exist only inside it — taken from an `[image.<name>]` or the
+/// image `serve` was started on, never typed by a page. See
 /// [`Policies::compose`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
@@ -100,9 +69,10 @@ impl Place {
     }
 }
 
-/// An environment, resolved into what luu builds a session from.
+/// A place and three lists, resolved into what luu builds a session from.
 #[derive(Debug, Clone)]
 pub struct Resolved {
+    /// Its lists' names: `tools · registries · empty`, or `empty`.
     pub name: String,
     /// What the sandbox grants: the working directory to read, and every
     /// list's `allow`.
@@ -111,10 +81,6 @@ pub struct Resolved {
     shell: (String, Zones),
     network: (String, Zones),
     files: (String, FilesList),
-    /// Made from a runtime and three lists by name, rather than from an
-    /// environment of the file: a resume makes it again from those names.
-    /// See [`Policies::compose`].
-    pub composed: bool,
 }
 
 /// The name an absent list has in the record: the empty list, which allows
@@ -123,11 +89,8 @@ pub struct Resolved {
 pub const EMPTY: &str = "(empty)";
 
 impl Policies {
-    /// Whether the lists and environments hold together. `postures` are the
-    /// names an environment may not take: a session names one or the other, and
-    /// one name for two things would make what it ran under depend on which
-    /// table was looked in first.
-    pub fn check<'a>(&self, postures: impl IntoIterator<Item = &'a String>) -> Result<(), String> {
+    /// Whether each list holds together.
+    pub fn check(&self) -> Result<(), String> {
         for (name, list) in &self.shell {
             check_zones(&format!("[shell.{name}]"), list, false)?;
         }
@@ -137,94 +100,52 @@ impl Policies {
         for (name, list) in &self.files {
             check_files(&format!("[files.{name}]"), list)?;
         }
-        let postures: Vec<&String> = postures.into_iter().collect();
-        for (name, environment) in &self.environments {
-            let at = format!("[environment.{name}]");
-            if postures.contains(&name) {
-                return Err(format!(
-                    "{at} and [posture.{name}] share a name: a session names one or the other"
-                ));
-            }
-            if !self.shell.contains_key(&environment.shell) {
-                return Err(format!(
-                    "{at} names shell = \"{}\", and there is no [shell.{}]",
-                    environment.shell, environment.shell
-                ));
-            }
-            if !self.network.contains_key(&environment.network) {
-                return Err(format!(
-                    "{at} names network = \"{}\", and there is no [network.{}]",
-                    environment.network, environment.network
-                ));
-            }
-            if !self.files.contains_key(&environment.files) {
-                return Err(format!(
-                    "{at} names files = \"{}\", and there is no [files.{}]",
-                    environment.files, environment.files
-                ));
-            }
-        }
         Ok(())
     }
 
-    /// Every environment, resolved. Only after [`Policies::check`].
-    pub fn resolve_all(&self) -> BTreeMap<String, Resolved> {
-        self.environments
-            .keys()
-            .filter_map(|name| Some((name.clone(), self.resolve(name)?)))
-            .collect()
-    }
-
-    /// An environment with some of its lists swapped for others in the same
-    /// file: what a new session's dialog makes when it starts from a preset
-    /// and changes a list. Everything else — the runtime, the image, the
-    /// limits — is the environment's. The lists that are not there are named,
-    /// in the order they were asked for.
-    pub fn resolve_with(
+    /// A session's policy made from where it runs and one list of each axis
+    /// by name — `None` for the empty one, [`EMPTY`] in the record. Named by
+    /// its lists; a resume makes it again from the copy it recorded
+    /// ([`Policies::recompose`]), not from these names.
+    pub fn compose(
         &self,
-        name: &str,
+        place: &Place,
         shell: Option<&str>,
         network: Option<&str>,
         files: Option<&str>,
     ) -> Result<Resolved, String> {
-        let Some(mut environment) = self.environments.get(name).cloned() else {
-            return Err(format!("there is no [environment.{name}]"));
+        fn pick<T: Clone + Default>(
+            kind: &str,
+            lists: &BTreeMap<String, T>,
+            name: Option<&str>,
+        ) -> Result<(String, T), String> {
+            match name {
+                None | Some(EMPTY) => Ok((EMPTY.to_string(), T::default())),
+                Some(name) => lists
+                    .get(name)
+                    .map(|list| (name.to_string(), list.clone()))
+                    .ok_or_else(|| format!("there is no [{kind}.{name}]")),
+            }
+        }
+        let shell = pick("shell", &self.shell, shell)?;
+        let network = pick("network", &self.network, network)?;
+        let files = pick("files", &self.files, files)?;
+        let shown = |name: &str| match name {
+            EMPTY => "empty".to_string(),
+            name => name.to_string(),
         };
-        if let Some(shell) = shell {
-            if !self.shell.contains_key(shell) {
-                return Err(format!("there is no [shell.{shell}]"));
-            }
-            environment.shell = shell.to_string();
-        }
-        if let Some(network) = network {
-            if !self.network.contains_key(network) {
-                return Err(format!("there is no [network.{network}]"));
-            }
-            environment.network = network.to_string();
-        }
-        if let Some(files) = files {
-            if !self.files.contains_key(files) {
-                return Err(format!("there is no [files.{files}]"));
-            }
-            environment.files = files.to_string();
-        }
-        let mut swapped = self.clone();
-        swapped.environments.insert(name.to_string(), environment);
-        swapped
-            .resolve(name)
-            .ok_or_else(|| format!("[environment.{name}] does not resolve"))
-    }
-
-    /// One environment, resolved: `None` when there is no such name, or one
-    /// of its lists is missing — which [`Policies::check`] refuses first.
-    pub fn resolve(&self, name: &str) -> Option<Resolved> {
-        let environment = self.environments.get(name)?;
-        let shell = self.shell.get(&environment.shell)?.clone();
-        let network = self.network.get(&environment.network)?.clone();
-        let files = self.files.get(&environment.files)?.clone();
+        let name = match (shell.0.as_str(), network.0.as_str(), files.0.as_str()) {
+            (EMPTY, EMPTY, EMPTY) => "empty".to_string(),
+            _ => format!(
+                "{} · {} · {}",
+                shown(&shell.0),
+                shown(&network.0),
+                shown(&files.0)
+            ),
+        };
         let mut policy = SandboxPolicy {
             paths: Vec::new(),
-            commands: shell.allow.clone(),
+            commands: shell.1.allow.clone(),
             ..SandboxPolicy::default()
         };
         // Every session reads the folder it works in: what a draft is for,
@@ -234,112 +155,30 @@ impl Policies {
             &mut policy,
             None,
             std::iter::once(PathRule::new(".", agent_core::sandbox::Access::Read))
-                .chain(files.allow.iter().cloned()),
+                .chain(files.1.allow.iter().cloned()),
         );
-        (policy.network, policy.egress) = network_of(&network.allow);
-        if let Some(enforcement) = environment.enforcement {
-            policy.enforcement = enforcement;
-        }
-        if let Some(limits) = environment.limits {
-            policy.limits = limits;
-        }
-        let mut worker = WorkerConfig {
-            runtime: environment.runtime,
-            image: environment.image.clone(),
-            paths: environment.image_paths.clone(),
+        (policy.network, policy.egress) = network_of(&network.1.allow);
+        let worker = WorkerConfig {
+            runtime: place.runtime,
+            image: place.image.clone(),
+            paths: place.image_paths.clone(),
             ..WorkerConfig::default()
         };
-        if let Some(timeout_ms) = environment.timeout_ms {
-            worker.timeout_ms = timeout_ms;
-        }
-        Some(Resolved {
-            name: name.to_string(),
+        Ok(Resolved {
+            name,
             policy,
             worker,
-            shell: (environment.shell.clone(), shell),
-            network: (environment.network.clone(), network),
-            files: (environment.files.clone(), files),
-            composed: false,
+            shell,
+            network,
+            files,
         })
     }
 
-    /// A session's policy made from where it runs and one list of each axis
-    /// by name — `None` for the empty one, [`EMPTY`] in the record — rather
-    /// than from an environment: what the new session's dialog asks for.
-    /// Named by its lists, and marked [`Resolved::composed`] so a resume
-    /// makes it again from the same names.
-    pub fn compose(
-        &self,
-        place: &Place,
-        shell: Option<&str>,
-        network: Option<&str>,
-        files: Option<&str>,
-    ) -> Result<Resolved, String> {
-        let mut composed = self.clone();
-        let pick = |kind: &str, name: Option<&str>| -> Result<String, String> {
-            match name {
-                None | Some(EMPTY) => Ok(EMPTY.to_string()),
-                Some(name) => {
-                    let there = match kind {
-                        "shell" => self.shell.contains_key(name),
-                        "network" => self.network.contains_key(name),
-                        _ => self.files.contains_key(name),
-                    };
-                    there
-                        .then(|| name.to_string())
-                        .ok_or_else(|| format!("there is no [{kind}.{name}]"))
-                }
-            }
-        };
-        let shell = pick("shell", shell)?;
-        let network = pick("network", network)?;
-        let files = pick("files", files)?;
-        composed.shell.insert(EMPTY.to_string(), Zones::default());
-        composed.network.insert(EMPTY.to_string(), Zones::default());
-        composed
-            .files
-            .insert(EMPTY.to_string(), FilesList::default());
-        let shown = |name: &String| match name.as_str() {
-            EMPTY => "empty".to_string(),
-            name => name.to_string(),
-        };
-        let name = match (shell.as_str(), network.as_str(), files.as_str()) {
-            (EMPTY, EMPTY, EMPTY) => "empty".to_string(),
-            _ => format!(
-                "{} · {} · {}",
-                shown(&shell),
-                shown(&network),
-                shown(&files)
-            ),
-        };
-        composed.environments.insert(
-            name.clone(),
-            Environment {
-                runtime: place.runtime,
-                image: place.image.clone(),
-                image_paths: place.image_paths.clone(),
-                timeout_ms: None,
-                shell,
-                network,
-                files,
-                enforcement: None,
-                limits: None,
-            },
-        );
-        let mut resolved = composed
-            .resolve(&name)
-            .ok_or_else(|| "the lists do not resolve".to_string())?;
-        resolved.composed = true;
-        Ok(resolved)
-    }
-}
-
-impl Policies {
-    /// A session made from lists, made again from the lists it copied when
-    /// it started — not from `config.toml`, whose lists may have been edited,
-    /// renamed or deleted since — on `place`, under the names it recorded.
-    /// `None` for lists recorded without their copy: a policy file's, or a
-    /// stream from before format 26, which are resumed by name as before.
+    /// A session made again from the lists it copied when it started — not
+    /// from `config.toml`, whose lists may have been edited, renamed or
+    /// deleted since — on `place`, under the names it recorded. `None` for
+    /// lists recorded without their copy: a policy file's, or a stream from
+    /// before format 26, which are read and not resumed.
     pub fn recompose(place: &Place, lists: &Lists) -> Option<Resolved> {
         let copied = lists.copied.as_deref()?;
         let mut policies = Policies::default();
@@ -364,48 +203,6 @@ impl Policies {
 }
 
 impl Resolved {
-    /// A `[posture.<name>]`, read as the environment it always was: its
-    /// policy file's `[sandbox]` with everything in `allow`, three lists named
-    /// after the posture, and its `[worker]` as where they run. The sandbox is
-    /// the file's own, unchanged, so a session built from this is the session
-    /// the posture built, and records the same hashes — a session recorded on
-    /// the posture resumes on it. In memory only: nothing of it is written
-    /// back to `config.toml`. See
-    /// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2, step 4.
-    pub fn of_posture(name: &str, file: &std::path::Path) -> Result<Self, String> {
-        let policy =
-            SandboxPolicy::from_file(file).map_err(|error| format!("[posture.{name}]: {error}"))?;
-        let worker =
-            WorkerConfig::from_file(file).map_err(|error| format!("[posture.{name}]: {error}"))?;
-        Ok(Self {
-            name: name.to_string(),
-            shell: (
-                name.to_string(),
-                Zones {
-                    allow: policy.commands.clone(),
-                    ..Zones::default()
-                },
-            ),
-            network: (
-                name.to_string(),
-                Zones {
-                    allow: network_allow(&policy),
-                    ..Zones::default()
-                },
-            ),
-            files: (
-                name.to_string(),
-                FilesList {
-                    allow: policy.paths.clone(),
-                    ..FilesList::default()
-                },
-            ),
-            policy,
-            worker,
-            composed: false,
-        })
-    }
-
     /// Its shell list, as written.
     pub fn shell(&self) -> &Zones {
         &self.shell.1
@@ -463,12 +260,9 @@ impl Resolved {
 /// zone as written. A policy file's are all `allow`, named after the file.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ListsView {
-    /// The environment's name, or `None` for a policy file. A session made
-    /// from lists has its lists' names here.
-    pub environment: Option<String>,
-    /// Made from lists by name rather than an environment of the file — so
-    /// there is no `[environment.<name>]` to point at, and a list named
-    /// [`EMPTY`] is the empty one rather than a table.
+    /// Made from lists the session copied — every session of `serve` — so a
+    /// list named [`EMPTY`] is the empty one rather than a table. False for
+    /// a one-shot's policy file, whose grants are all `allow`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub composed: bool,
     pub shell: Named<Zones>,
@@ -489,11 +283,10 @@ pub struct Named<T> {
 }
 
 impl ListsView {
-    /// An environment's lists, as written.
-    pub fn of_environment(resolved: &Resolved) -> Self {
+    /// A session's lists, as written.
+    pub fn of_lists(resolved: &Resolved) -> Self {
         Self {
-            environment: Some(resolved.name.clone()),
-            composed: resolved.composed,
+            composed: true,
             shell: Named {
                 name: resolved.shell.0.clone(),
                 list: resolved.shell.1.clone(),
@@ -518,7 +311,6 @@ impl ListsView {
             list,
         };
         Self {
-            environment: None,
             composed: false,
             shell: named(Zones {
                 allow: granted.commands.clone(),
@@ -551,8 +343,8 @@ impl ListsView {
     }
 }
 
-/// The lists of a session built from a policy file — a posture, or the
-/// server's own — which has everything in `allow`. `label` names all three:
+/// The lists of a one-shot built from a policy file (`luu chat --sandbox`),
+/// which has everything in `allow`. `label` names all three:
 /// the file is the only name they have.
 pub fn lists_of_file(label: &str, granted: &SandboxPolicy) -> Lists {
     Lists {
@@ -577,7 +369,7 @@ pub fn lists_of_file(label: &str, granted: &SandboxPolicy) -> Lists {
                 ..FilesList::default()
             },
         ),
-        // A policy file is resumed by its name until postures go.
+        // A policy file is not a session's to carry: it is not resumed.
         copied: None,
     }
 }
@@ -730,6 +522,7 @@ fn digest(name: &str, value: &impl Serialize) -> Hashed {
 mod tests {
     use super::*;
     use agent_core::sandbox::Access;
+    use serde::Deserialize;
 
     fn policies(text: &str) -> Policies {
         #[derive(Deserialize)]
@@ -740,19 +533,16 @@ mod tests {
             network: BTreeMap<String, Zones>,
             #[serde(default)]
             files: BTreeMap<String, FilesList>,
-            #[serde(default)]
-            environment: BTreeMap<String, Environment>,
         }
         let file: File = toml::from_str(text).expect("the test's TOML");
         Policies {
             shell: file.shell,
             network: file.network,
             files: file.files,
-            environments: file.environment,
         }
     }
 
-    const CONTAINER: &str = r#"
+    const LISTS: &str = r#"
         [shell.rust]
         allow = ["cargo", "rustc", "git"]
         deny  = ["curl"]
@@ -764,30 +554,25 @@ mod tests {
 
         [files.project]
         allow = [{ path = ".", access = "read-write" }]
-
-        [environment.container]
-        runtime = "docker"
-        image   = "luu-worker:dev"
-        image-paths = [{ path = "/usr/local/cargo", access = "execute" }]
-        timeout-ms = 60000
-        shell   = "rust"
-        network = "registries"
-        files   = "project"
-        limits  = { cpu-seconds = 600, file-size-mb = 1024 }
-
-        [environment.local]
-        shell   = "rust"
-        network = "off"
-        files   = "project"
     "#;
 
-    /// What an environment's `allow` becomes is exactly what a policy file's
+    fn docker() -> Place {
+        Place {
+            runtime: Runtime::Docker,
+            image: Some("luu-worker:dev".into()),
+            image_paths: vec![PathRule::new("/usr/local/cargo", Access::Execute)],
+        }
+    }
+
+    /// What the lists' `allow` becomes is exactly what a policy file's
     /// `[sandbox]` and `[worker]` would have said.
     #[test]
-    fn an_environment_resolves_into_the_sandbox_and_the_worker() {
-        let policies = policies(CONTAINER);
-        policies.check(&[]).expect("it holds together");
-        let resolved = policies.resolve("container").expect("named");
+    fn lists_resolve_into_the_sandbox_and_the_worker() {
+        let policies = policies(LISTS);
+        policies.check().expect("it holds together");
+        let resolved = policies
+            .compose(&docker(), Some("rust"), Some("registries"), Some("project"))
+            .expect("named");
 
         assert_eq!(resolved.policy.commands, ["cargo", "rustc", "git"]);
         assert_eq!(
@@ -796,10 +581,8 @@ mod tests {
         );
         assert!(resolved.policy.network);
         assert_eq!(resolved.policy.egress, ["crates.io", "*.crates.io"]);
-        assert_eq!(resolved.policy.limits.cpu_seconds, Some(600));
         assert_eq!(resolved.worker.runtime, Runtime::Docker);
         assert_eq!(resolved.worker.image.as_deref(), Some("luu-worker:dev"));
-        assert_eq!(resolved.worker.timeout_ms, 60000);
         assert_eq!(
             resolved.worker.paths,
             [PathRule::new("/usr/local/cargo", Access::Execute)]
@@ -808,14 +591,16 @@ mod tests {
         // `curl` in deny grants nothing.
         assert!(!resolved.policy.commands.iter().any(|c| c == "curl"));
 
-        let local = policies.resolve("local").expect("named");
+        let local = policies
+            .compose(&Place::host(), Some("rust"), Some("off"), Some("project"))
+            .expect("named");
         assert!(!local.policy.network, "an empty allow is no network");
         assert_eq!(local.worker.runtime, Runtime::Host);
     }
 
-    /// A posture and an environment that grant the same are the same lists.
+    /// A policy file and lists that grant the same are the same lists.
     #[test]
-    fn a_policy_file_and_an_environment_that_allow_the_same_hash_the_same() {
+    fn a_policy_file_and_lists_that_allow_the_same_hash_the_same() {
         let policies = policies(
             r#"
             [shell.s]
@@ -823,13 +608,11 @@ mod tests {
             [network.n]
             [files.f]
             allow = [{ path = ".", access = "read-write" }]
-            [environment.e]
-            shell = "s"
-            network = "n"
-            files = "f"
             "#,
         );
-        let resolved = policies.resolve("e").expect("named");
+        let resolved = policies
+            .compose(&Place::host(), Some("s"), Some("n"), Some("f"))
+            .expect("named");
         let from_file = lists_of_file(
             "luu.toml",
             &SandboxPolicy {
@@ -837,46 +620,27 @@ mod tests {
                 ..SandboxPolicy::default()
             },
         );
-        let from_environment = resolved.lists(&resolved.policy);
+        let from_lists = resolved.lists(&resolved.policy);
         assert!(
-            from_environment.same(&from_file),
+            from_lists.same(&from_file),
             "order is not content, and names are labels"
         );
-        assert_eq!(from_environment.shell.name, "s");
+        assert_eq!(from_lists.shell.name, "s");
         assert_eq!(from_file.shell.name, "luu.toml");
         assert_eq!(from_file.shell.sha256.len(), 64);
     }
 
-    /// A preset with a list swapped: the environment's runtime and image, the
-    /// other list's grants, and the swap in the record's names.
-    #[test]
-    fn an_environment_takes_another_list_of_the_same_file() {
-        let policies = policies(CONTAINER);
-        let resolved = policies
-            .resolve_with("container", None, Some("off"), None)
-            .expect("both are there");
-        assert_eq!(resolved.network(), &Zones::default());
-        assert!(!resolved.policy.network, "off reaches nothing");
-        assert_eq!(resolved.worker.image.as_deref(), Some("luu-worker:dev"));
-        assert_eq!(resolved.lists(&resolved.policy).network.name, "off");
-        assert_eq!(resolved.lists(&resolved.policy).shell.name, "rust");
-        assert_eq!(
-            policies
-                .resolve_with("container", Some("nope"), None, None)
-                .err()
-                .as_deref(),
-            Some("there is no [shell.nope]")
-        );
-        assert!(policies.resolve_with("nowhere", None, None, None).is_err());
-    }
-
-    /// The page's view: an environment's zones as written; a policy file's
+    /// The page's view: a session's zones as written; a policy file's
     /// grants in `allow`, with paths under the base spelt from it.
     #[test]
     fn the_lists_are_shown_as_written_and_a_policy_file_as_allow() {
-        let policies = policies(CONTAINER);
-        let view = ListsView::of_environment(&policies.resolve("local").expect("named"));
-        assert_eq!(view.environment.as_deref(), Some("local"));
+        let policies = policies(LISTS);
+        let view = ListsView::of_lists(
+            &policies
+                .compose(&Place::host(), Some("rust"), Some("off"), Some("project"))
+                .expect("named"),
+        );
+        assert!(view.composed);
         assert_eq!(view.shell.name, "rust");
         assert_eq!(view.shell.list.allow, ["cargo", "rustc", "git"]);
         assert_eq!(view.shell.list.deny, ["curl"]);
@@ -905,7 +669,7 @@ mod tests {
             },
             base,
         );
-        assert_eq!(view.environment, None);
+        assert!(!view.composed);
         assert_eq!(view.shell.list.allow, ["git"]);
         assert!(view.shell.list.deny.is_empty());
         assert_eq!(
@@ -927,13 +691,18 @@ mod tests {
     /// person could be asked for it — so it is in the hash.
     #[test]
     fn deny_is_in_the_hash_and_a_flag_that_widens_is_too() {
-        let policies = policies(CONTAINER);
-        let resolved = policies.resolve("container").expect("named");
+        let policies = policies(LISTS);
+        let compose = |policies: &Policies| {
+            policies
+                .compose(&docker(), Some("rust"), Some("registries"), Some("project"))
+                .expect("named")
+        };
+        let resolved = compose(&policies);
         let plain = resolved.lists(&resolved.policy);
 
         let mut wider = policies.clone();
         wider.shell.get_mut("rust").unwrap().deny.clear();
-        let denied_less = wider.resolve("container").unwrap();
+        let denied_less = compose(&wider);
         assert!(!denied_less.lists(&denied_less.policy).same(&plain));
 
         let mut widened = resolved.policy.clone();
@@ -944,16 +713,15 @@ mod tests {
         );
     }
 
-    /// A session made from lists by name: no environment, the empty list
-    /// where none is chosen, the folder read whatever the lists say, and the
-    /// names in the record — the empty one under a name no list can have.
+    /// A session made from lists by name: the empty list where none is
+    /// chosen, the folder read whatever the lists say, and the names in the
+    /// record — the empty one under a name no list can have.
     #[test]
     fn lists_by_name_compose_into_a_session_and_an_absent_one_is_empty() {
-        let policies = policies(CONTAINER);
+        let policies = policies(LISTS);
         let resolved = policies
             .compose(&Place::host(), Some("rust"), None, Some("project"))
             .expect("both are there");
-        assert!(resolved.composed);
         assert_eq!(resolved.name, "rust · empty · project");
         assert_eq!(resolved.policy.commands, ["cargo", "rustc", "git"]);
         assert!(
@@ -972,11 +740,7 @@ mod tests {
         assert!(empty.policy.commands.is_empty());
         assert_eq!(empty.policy.paths, [PathRule::new(".", Access::Read)]);
 
-        let contained = Place {
-            runtime: Runtime::Docker,
-            image: Some("luu-worker:dev".into()),
-            image_paths: vec![PathRule::new("/usr/local/cargo", Access::Execute)],
-        };
+        let contained = docker();
         let there = policies
             .compose(
                 &contained,
@@ -1001,15 +765,12 @@ mod tests {
     /// again from what it carries — the file's lists edited, renamed or gone.
     #[test]
     fn a_session_is_made_again_from_the_lists_it_copied() {
-        let policies = policies(CONTAINER);
+        let policies = policies(LISTS);
         let started = policies
             .compose(&Place::host(), Some("rust"), None, Some("project"))
             .expect("both are there");
         let recorded = started.lists(&started.policy);
-        let copied = recorded
-            .copied
-            .as_deref()
-            .expect("a composed session copies");
+        let copied = recorded.copied.as_deref().expect("a session copies");
         assert_eq!(copied.shell, *started.shell());
         assert_eq!(copied.network, Zones::default());
 
@@ -1019,7 +780,6 @@ mod tests {
         let again = Policies::recompose(&Place::host(), &read).expect("made from its copy");
         assert_eq!(again.name, started.name);
         assert_eq!(again.policy, started.policy);
-        assert!(again.composed);
         assert!(
             again.lists(&again.policy).same(&recorded),
             "the same hashes, so a resume compares equal",
@@ -1041,61 +801,22 @@ mod tests {
         assert!(Policies::recompose(&Place::host(), &file).is_none());
     }
 
-    /// A posture read as an environment builds the posture's own sandbox and
-    /// records the hashes the posture always recorded, so a session made on
-    /// it resumes on it.
-    #[test]
-    fn a_posture_is_read_as_the_environment_it_always_was() {
-        let dir = std::env::temp_dir().join(format!("luu-posture-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("wide.toml");
-        std::fs::write(
-            &file,
-            "[worker]\nruntime = \"docker\"\nimage = \"luu-worker:dev\"\n\n\
-             [sandbox]\ncommands = [\"git\", \"ls\"]\nnetwork = true\n\n\
-             [[sandbox.paths]]\npath = \".\"\naccess = \"read-write\"\n",
-        )
-        .unwrap();
-        let resolved = Resolved::of_posture("wide", &file).expect("reads");
-        let from_file = SandboxPolicy::from_file(&file).unwrap();
-        assert_eq!(resolved.policy, from_file);
-        assert_eq!(resolved.worker.runtime, Runtime::Docker);
-        assert_eq!(resolved.worker.image.as_deref(), Some("luu-worker:dev"));
-        assert!(!resolved.composed);
-        let lists = resolved.lists(&resolved.policy);
-        assert!(lists.same(&lists_of_file("wide.toml", &from_file)));
-        assert_eq!(lists.shell.name, "wide");
-        assert_eq!(resolved.network().allow, ["*"]);
-        assert!(Resolved::of_posture("gone", &dir.join("nope.toml")).is_err());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     #[test]
     fn what_does_not_hold_together_is_refused_and_says_where() {
-        let refused =
-            |text: &str, postures: &[String]| policies(text).check(postures).expect_err("refused");
-        let env = "[network.n]\n[files.f]\n[environment.e]\nshell = \"s\"\nnetwork = \"n\"\nfiles = \"f\"\n";
+        let refused = |text: &str| policies(text).check().expect_err("refused");
 
-        assert!(refused(env, &[]).contains("there is no [shell.s]"));
+        assert!(refused("[shell.s]\nallow = [\"*\"]\n").contains("write the programs"));
+        assert!(refused("[shell.s]\nallow = [\"sh -c\"]\n").contains("no spaces"));
+        assert!(refused("[shell.s]\nallow = [\"/bin/sh\"]\n").contains("never a path"));
         assert!(
-            refused(&format!("[shell.s]\nallow = [\"*\"]\n{env}"), &[])
-                .contains("write the programs")
-        );
-        assert!(refused("[shell.s]\nallow = [\"sh -c\"]\n", &[]).contains("no spaces"));
-        assert!(refused("[shell.s]\nallow = [\"/bin/sh\"]\n", &[]).contains("never a path"));
-        assert!(
-            refused("[shell.s]\nallow = [\"git\"]\ndeny = [\"git\"]\n", &[])
+            refused("[shell.s]\nallow = [\"git\"]\ndeny = [\"git\"]\n")
                 .contains("in both allow and deny")
         );
-        assert!(refused("[network.n]\ndeny = [\"*\"]\n", &[]).contains("never given"));
+        assert!(refused("[network.n]\ndeny = [\"*\"]\n").contains("never given"));
         assert!(
-            refused(
-                "[files.f]\nallow = [{ path = \".\" }]\ndeny = [\".env\"]\n",
-                &[]
-            )
-            .contains("not accepted until it can")
+            refused("[files.f]\nallow = [{ path = \".\" }]\ndeny = [\".env\"]\n")
+                .contains("not accepted until it can")
         );
-        assert!(refused(&format!("[shell.s]\n{env}"), &["e".to_string()]).contains("share a name"));
 
         // Two zones: what neither names is asked, so there is no third.
         let asking = toml::from_str::<Zones>("ask = [\"*\"]").expect_err("no ask zone");
@@ -1103,7 +824,7 @@ mod tests {
 
         // `*` on a network list is any host, as `network = true` with no egress.
         let any = policies("[network.n]\nallow = [\"*\"]\n");
-        any.check(&[]).expect("any host is a thing to say");
+        any.check().expect("any host is a thing to say");
         assert_eq!(network_of(&any.network["n"].allow), (true, Vec::new()));
     }
 }

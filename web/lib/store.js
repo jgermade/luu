@@ -105,8 +105,8 @@ export const state = $reactive({
   // reading turn 3 while turn 9 runs keeps reading turn 3: the view moves when
   // they move it.
   selectedTurn: null,
-  // `{ path, choosable, running, postures }` — what a new session may be
-  // allowed to do, or `null` where nothing has asked yet.
+  // `{ path, choosable, runtimes, default_runtime }` — where a new session
+  // may run, or `null` where nothing has asked yet.
   postures: null,
   // The last cut the window made. Kept beside the budget rather than inside it:
   // the buckets say what the prompt is worth, this says what stopped being in
@@ -1111,12 +1111,9 @@ export function openSettings() {
   state.settingsOpen = true
 }
 
-/// What a session may be started under, by name.
-///
-/// Read-only: a posture is a policy file, and a page that could write one would
-/// be a page that could widen its own sandbox. The names come from
-/// `config.toml`, read by the server when it started. See
-/// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+/// Where a session may be started: this machine, and each image `config.toml`
+/// names on every container runtime. (The route keeps the name it had when a
+/// session was started on a posture.)
 export async function loadPostures() {
   try {
     const res = await fetch("./api/postures", { headers: apiHeaders() })
@@ -1596,7 +1593,7 @@ export async function sleepSession(id) {
 /// machine.
 export async function newSession(choice) {
   const asked =
-    choice && (choice.provider || choice.model || choice.posture || choice.runtime || choice.lists || choice.folder) ? choice : null
+    choice && (choice.provider || choice.model || choice.runtime || choice.lists || choice.folder) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",
@@ -1656,28 +1653,18 @@ export async function providerModels(name, { facts = false } = {}) {
   }
 }
 
-/// The posture a stored session ran under, by name, for the resume to say back.
+/// Where a stored session ran, for the resume to say back: its runtime and
+/// image (`record::Composed`).
 ///
-/// The server refuses a resume whose posture is not the one the session's jobs
-/// were approved against, and it refuses rather than rebuilding it on its own —
-/// building one can start a container, and a click on a row in the history is
-/// not a request to start a container. So the page says which one it means, and
-/// the server still checks that the name resolves to the same three facts. See
-/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
+/// The lists are not said where the session copied them (format 26): the
+/// server makes it again from its copy, so a list edited or deleted in
+/// Settings since does not stop it. A session from before that is said back
+/// with its lists by name, the empty ones left out. See
+/// `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
 ///
-/// A session made from lists — every one the new session's dialog starts
-/// since 2026-10-23 — has no name to say: it is said back as what made it,
-/// its runtime and image and its lists by name, the empty ones left out as
-/// they were when it started (`record::Composed`).
-///
-/// **Since format 26 the lists are not said at all** where the session copied
-/// them: the server makes it again from its copy, so a list edited or
-/// deleted in Settings since does not stop it — only where it runs is said.
-/// See `RECORD/2026-10-30.a-session-carries-its-policies.completed.md`.
-///
-/// `null` for a session recorded before the posture was in the header, for one
-/// that ran on the server's own policy file, and whenever the view cannot be
-/// read — all three mean *say nothing*, which is what every resume did before.
+/// `null` for a session that was not made from lists — one recorded under a
+/// policy file, which the server reads and does not resume — and whenever
+/// the view cannot be read.
 async function storedPosture(id) {
   try {
     const res = await fetch(`./api/sessions/${encodeURIComponent(id)}`, { headers: apiHeaders() })
@@ -1691,7 +1678,7 @@ async function storedPosture(id) {
       const place = { runtime, ...(image ? { image } : {}) }
       return posture.lists?.copied ? place : { ...place, lists }
     }
-    return posture?.name ? { posture: posture.name } : null
+    return null
   } catch {
     return null
   }
@@ -1706,9 +1693,9 @@ const EMPTY = "(empty)"
 /// of the file and a model there. What differs is that the history comes along,
 /// and that the session's stream gains a header saying where it changed.
 ///
-/// The posture is not part of that choice and never was: it is read off the
-/// session being resumed, because a destination is where a session sends and a
-/// posture is what it may do.
+/// What it may do is not part of that choice and never was: it is read off the
+/// session being resumed, because a destination is where a session sends and
+/// its lists are what it may do.
 export async function resumeSession(id, choice) {
   const posture = await storedPosture(id)
   const wanted = {
