@@ -12516,9 +12516,8 @@ struct NewFolder {
 /// Who may is who may rename a file (`workspace_writable`): a person at this
 /// machine, or a user in their own folder. It is not the session's sandbox
 /// that is asked — the picker chooses *which* folder a session gets, so it
-/// is above every session — but a sandbox that grants `read-write` on the
-/// root and nothing else, so a name that would land outside it is refused by
-/// the same `check_path` that refuses a tool call.
+/// is above every session — but one whose base is the root, so a name that
+/// would land outside it is refused as a rename's would be.
 async fn post_folders(
     State(state): State<AppRouterState>,
     headers: axum::http::HeaderMap,

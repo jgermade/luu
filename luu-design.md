@@ -1358,8 +1358,11 @@ it does not reflow the name being pointed at. See
 **The pencil renames** (so does F2 on a row): the name becomes a field, Enter or leaving it
 renames, ESC puts it back, and a refusal is said under the row with the field still open. It is
 `POST /api/workspace/rename` with a new *name*, never a path, so a rename cannot become a move;
-a name already taken is a 409, not an overwrite; both ends are checked by the sandbox for
-`read-write`, so a posture that only reads refuses it; and only a page on this machine may ask,
+a name already taken is a 409, not an overwrite; both ends are held to the session's *folder*
+and not to its files list — **what a list grants is what a tool may do, and a rename or a new
+folder in the page is the person's**, as its terminal on this machine is, since 2026-11-11
+([`RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`](RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md));
+and only a page on this machine may ask,
 by the bound address and by `Host`, as for Settings' writes. An open tab and the expanded
 folders follow what was renamed. See
 [`RECORD/2026-10-21.the-tree-renames.completed.md`](RECORD/2026-10-21.the-tree-renames.completed.md).

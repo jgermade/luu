@@ -49,13 +49,6 @@ test.beforeAll(async () => {
   git("add .")
   git("commit -qm init")
 
-  // A files list that writes the folder: a session reads no policy file, and
-  // from no list it only reads, which refuses a rename as it refuses a tool's.
-  mkdirSync(join(scratch, "home"), { recursive: true })
-  writeFileSync(
-    join(scratch, "home/config.toml"),
-    '[files.tree]\nallow = [{ path = ".", access = "read-write" }]\n',
-  )
   server = spawn(binary(), ["serve", "--bind", `127.0.0.1:${PORT}`, "--mock-delay-ms", "0"], {
     cwd: work,
     // `SHELL` is the host terminal's shell: the plain one, so the test does
@@ -71,19 +64,13 @@ test.beforeAll(async () => {
   for (;;) {
     if (server.exitCode !== null) throw new Error(`luu serve exited with ${server.exitCode}:\n${output}`)
     try {
-      if ((await fetch(`${BASE}/api/settings`)).ok) break
+      if ((await fetch(`${BASE}/api/settings`)).ok) return
     } catch {
       // Not listening yet.
     }
     if (Date.now() > deadline) throw new Error(`luu serve never answered:\n${output}`)
     await new Promise(again => setTimeout(again, 200))
   }
-  const started = await fetch(`${BASE}/api/sessions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ lists: { files: "tree" } }),
-  })
-  if (!started.ok) throw new Error(`no session on the files list: ${await started.text()}`)
 })
 
 test.afterAll(() => {
