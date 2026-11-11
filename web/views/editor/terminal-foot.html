@@ -30,8 +30,8 @@
   if (!state.postures) loadPostures()
 
   $: choosable = !!state.postures?.choosable
-  // A session made from lists is no posture, and is named by where it runs.
-  $: hereOption = placeHere(state.postures, terminal.info?.posture)
+  // A session is named by where it runs.
+  $: hereOption = placeHere(terminal.info?.posture)
   $: mark = placeMark(hereOption?.where)
   // Only what the button does not already say: an open shell needs no word,
   // and neither does one never opened.

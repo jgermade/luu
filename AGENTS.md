@@ -155,7 +155,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # (a modal) while git counts the file as changed, and at the far right a
 # terminal: a shell where the session's commands run (its container, or this
 # machine), in a panel under the editor whose *Runtime* button opens a dialog
-# that moves the session to another posture between jobs, once a box saying
+# that moves the session to another runtime, once a box saying
 # what stays behind is ticked. A host shell is the whole account, so
 # `[terminal] host` decides who gets one: `loopback` (the default), `always`
 # (whoever holds the token) or `never`.
@@ -200,12 +200,11 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # Settings → Runtimes is where a session's commands may run: each container
 # runtime (docker, podman, nerdctl, colima, container) probed — each on its own,
 # its card filled when it answers — for whether it is installed, answers, and
-# has the images the policy files name — with install (podman and colima, by
+# has the images `[image.*]` names — with install (podman and colima, by
 # Homebrew on macOS, as the person), start, and a build of an image that is
 # missing: from this version's release (seconds, `Containerfile.release`) or,
 # in luu's own checkout and nowhere else, from source (minutes); the
-# `[posture.*]` table, a new one naming a policy file out of the ones at the top
-# of the checkout; and `[terminal] host`. Writes are loopback-only, like Engines.
+# `[image.*]` table; and `[terminal] host`. Writes are loopback-only, like Engines.
 # A session whose runtime is down starts it with the same lines *start it* runs,
 # and asks the worker again; nothing it installs in the container is kept.
 # `built` means *this luu's worker*: the image's worker is asked for its hello,
@@ -275,23 +274,33 @@ cargo run --bin luu -- key new --out ~/.luu/approval.key --name jgermade
 echo '{"type":"approve_plan","job":2,"files":["Cargo.toml"]}' \
   | cargo run --bin luu -- key sign --key ~/.luu/approval.key --session <id> --as jgermade
 
-# what a *session* may do, chosen when it starts: `[posture.<name>]` in the
-# state directory's config.toml names a policy file, and `serve` offers the
-# names to the page. The posture decides the sandbox and the seam together,
-# because one file decides both.
+# what a *session* may do, chosen when it starts: one list of each axis out of
+# the state directory's config.toml, which the session copies. Nothing names a
+# combination — `[posture.*]` and `[environment.*]` do not load — and `serve`
+# reads no policy file: `--sandbox` is refused there, and its first session is
+# this machine with three empty lists, which reads its folder and asks the rest.
 #
-#   [posture.container]
-#   policy = "luu.container.toml"
+#   [shell.rust]
+#   allow = ["cargo", "rustc", "git", "rg", "ls"]
+#   deny  = ["curl"]
+#   [network.registries]
+#   allow = ["crates.io"]
+#   [files.project]
+#   allow = [{ path = ".", access = "read-write" }]
+#   [image.dev]
+#   ref = "luu-worker:dev"
 #
-# A resume may not move it: a destination is where a session sends and a posture
-# is what it may do, and its jobs were approved against this one. The live
-# session may move between jobs — the terminal panel's picker, or
-# `PUT /api/session/posture {"posture": "<name>" | null, "runtime": …}` — and
-# the stream gains a header line saying so. `runtime` is a variant: a contained
-# posture on another container runtime (docker, podman, nerdctl, colima,
-# container), never a host posture in a container or the other way round.
+#   POST /api/sessions {"runtime": "docker", "image": "luu-worker:dev",
+#                       "lists": {"shell": "rust", "files": "project"}}
+#
+# A resume makes it again from its copy, so a list edited since changes nothing
+# about it, and may not move what it may do. The live session moves by runtime
+# alone — the terminal panel's dialog, or
+# `PUT /api/session/runtime {"runtime": …, "image": …}` — and the stream gains
+# a header line saying so.
 
-# level 3: the same run, with every tool call executed inside a container.
+# level 3, for a one-shot: the same run, with every tool call executed inside a
+# container. `chat` and `tools` still take a policy file, and `[worker]` from it.
 # `--worker direct` is the same seam with no container at all, which is how the
 # IPC gets tested where no runtime is installed.
 docker build -t luu-worker:dev -f Containerfile .
@@ -454,8 +463,10 @@ fragments the turns were shown, quoted verbatim under a token cap), which is
 what the `summaries` bucket in the budget panel plots. A directive it does not
 recognise is an error, never a prompt.
 
-The sandbox comes from `luu.toml` — `[sandbox]`, with `paths`, `commands`,
-`network`, `enforcement` and `[sandbox.limits]` — and the
+**For `chat`, `tools`, `map` and `select`** the sandbox comes from `luu.toml`
+(or `--sandbox FILE`) — `[sandbox]`, with `paths`, `commands`, `network`,
+`enforcement` and `[sandbox.limits]`; in `serve` it comes from the lists a
+session copied, and no file. Either way the
 `--allow-read/-write/-exec`, `--allow-command`, `--allow-network` and
 `--sandbox-enforcement` flags **add** to it for one run. `paths` says what a
 child may *reach*; `limits` says what it may **spend**, as `setrlimit` in the

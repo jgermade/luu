@@ -114,9 +114,10 @@ pub struct Agency {
     /// recording names them. `None` only where nothing resolved one — a test's
     /// hand-built agency. See [`crate::policies`].
     lists: Option<record::Lists>,
-    /// The environment it was built from, when it was one: its lists' `ask`
-    /// and `deny`, which the sandbox does not carry. See [`crate::grants`].
-    environment: Option<Arc<crate::policies::Resolved>>,
+    /// The lists it was made from, as written — every session of `serve`: their
+    /// `deny`, which the sandbox does not carry. `None` for a one-shot's
+    /// policy file. See [`crate::grants`].
+    composed: Option<Arc<crate::policies::Resolved>>,
 }
 
 /// The folder of scratch a draft may write in, at the top of the working
@@ -185,27 +186,27 @@ impl Agency {
             limits,
             worker,
             lists: None,
-            environment: None,
+            composed: None,
         }
     }
 
-    /// The environment it was built from.
-    pub fn with_environment(mut self, environment: Arc<crate::policies::Resolved>) -> Self {
-        self.environment = Some(environment);
+    /// The lists it was made from.
+    pub fn with_composed(mut self, composed: Arc<crate::policies::Resolved>) -> Self {
+        self.composed = Some(composed);
         self
     }
 
-    /// The environment it was built from, when it was one.
-    pub fn environment(&self) -> Option<&crate::policies::Resolved> {
-        self.environment.as_deref()
+    /// The lists it was made from, when it was made from lists.
+    pub fn composed(&self) -> Option<&crate::policies::Resolved> {
+        self.composed.as_deref()
     }
 
-    /// The lists it was built from, for the page: the environment's as
-    /// written, or the policy file's, all in `allow` — and the enforcement the
+    /// The lists it was built from, for the page: as written, or a policy
+    /// file's, all in `allow` — and the enforcement the
     /// session runs under, flags included.
     pub fn lists_view(&self) -> crate::policies::ListsView {
-        let mut view = match &self.environment {
-            Some(environment) => crate::policies::ListsView::of_environment(environment),
+        let mut view = match &self.composed {
+            Some(composed) => crate::policies::ListsView::of_lists(composed),
             None => crate::policies::ListsView::of_policy(
                 self.lists
                     .as_ref()
@@ -223,11 +224,11 @@ impl Agency {
     /// was built from lists — whatever they do not deny, since approving the
     /// plan is a person's yes, for its job: the plan's `commands` but those
     /// the shell list denies, the working directory to write, and any host
-    /// where the network list denies none. A posture's or the server's own
-    /// policy file is still the outer bound: nothing past it. See
+    /// where the network list denies none. A one-shot's policy file
+    /// is still the outer bound: nothing past it. See
     /// `RECORD/2026-10-22.policies-not-postures.WIP.md`, *two zones*.
     pub fn gate_sandbox(&self, commands: &[String]) -> Arc<Sandbox> {
-        let Some(environment) = &self.environment else {
+        let Some(environment) = &self.composed else {
             return self.sandbox.clone();
         };
         let mut policy = self.sandbox.to_policy();
@@ -291,16 +292,12 @@ impl Agency {
             folder: Some(self.sandbox.base().display().to_string()),
             // As asked, before the flags: a resume asks the same, and the
             // same flags are over it.
-            composed: self
-                .environment
-                .as_ref()
-                .filter(|environment| environment.composed)
-                .map(|environment| {
-                    Box::new(record::Composed {
-                        runtime: environment.worker.runtime.as_str().to_string(),
-                        image: environment.worker.image.clone(),
-                    })
-                }),
+            composed: self.composed.as_ref().map(|environment| {
+                Box::new(record::Composed {
+                    runtime: environment.worker.runtime.as_str().to_string(),
+                    image: environment.worker.image.clone(),
+                })
+            }),
         }
     }
 

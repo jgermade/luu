@@ -124,12 +124,6 @@ export const prefs = $reactive({
   /// The terminal panel's height in pixels, as last dragged from its top
   /// edge, or `null` for the stylesheet's 16rem.
   terminalHeight: keptWidth("luu.height.terminal"),
-  /// Where the last session ran, as `posture|runtime` (see `lib/places.js`):
-  /// what a new session is offered first. Set when a session is started and
-  /// when one is moved, and checked against `/api/postures` before it is
-  /// offered, because a posture can leave `config.toml` and a runtime this
-  /// machine.
-  place: keptText("luu.place", "|"),
   /// What the last session was started with, as JSON `{ runtime, lists }`:
   /// the new session's runtime (`runtime|image`) and its three lists by name,
   /// `""` for the empty one. Checked against `/api/postures` and the lists
@@ -216,11 +210,6 @@ export function setEditor(which) {
 export function setLayout(which) {
   prefs.layout = which
   keep("luu.layout", which)
-}
-
-export function setPlace(value) {
-  prefs.place = value
-  keep("luu.place", value)
 }
 
 export function setStart(value) {

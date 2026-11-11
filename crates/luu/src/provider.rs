@@ -438,29 +438,21 @@ struct File {
     max_tool_steps: Option<u32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     provider: BTreeMap<String, Profile>,
-    /// `[posture.<name>]`: what a session is allowed to do, by the name of the
-    /// policy file that decides it. Beside the providers because it is the same
-    /// kind of thing — a name written on this machine, so that what a surface
-    /// may choose is bounded by what somebody typed here. See
-    /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    posture: BTreeMap<String, Posture>,
     /// `[shell.<name>]`, `[network.<name>]`, `[files.<name>]`: what a session
-    /// may run, reach and touch, as lists in three zones — and
-    /// `[environment.<name>]`, one of each and where they run. What postures
-    /// become. See [`crate::policies`] and
-    /// `RECORD/2026-10-22.policies-not-postures.WIP.md`.
+    /// may run, reach and touch, as lists in two zones. A session copies the
+    /// ones a person chose; nothing names a combination, so a `[posture.*]`
+    /// or an `[environment.*]` is an unknown table and the file does not
+    /// load. See [`crate::policies`] and
+    /// `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     shell: BTreeMap<String, crate::policies::Zones>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     network: BTreeMap<String, crate::policies::Zones>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     files: BTreeMap<String, crate::policies::FilesList>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    environment: BTreeMap<String, crate::policies::Environment>,
     /// `[image.<name>]`: the images a session may run in, each with the trees
     /// that exist only inside it. Where the new session's *Runtime* finds its
-    /// images, in place of the postures that used to name them. See [`Image`]
+    /// images. See [`Image`]
     /// and `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     image: BTreeMap<String, Image>,
@@ -616,6 +608,12 @@ pub struct SmtpTable {
     /// luu's environment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_ref: Option<String>,
+    /// A PEM of certificates the mail server's may chain to, **beside**
+    /// Mozilla's roots: a private CA's. Read on every send. For this one
+    /// host and nothing else luu connects to. See
+    /// `RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<PathBuf>,
 }
 
 impl AuthTable {
@@ -993,22 +991,6 @@ pub struct Image {
     pub paths: Vec<agent_core::sandbox::PathRule>,
 }
 
-/// One named posture: a policy file, and nothing else.
-///
-/// The file decides the sandbox **and** the seam — `commands`, `network`,
-/// `enforcement`, `limits` and `[worker]` — because the loosening and the
-/// container were put in one file on purpose
-/// (`RECORD/2026-09-01.the-container-decided.completed.md`). So a posture is a
-/// path, and never a runtime and an image named separately: the two would be a
-/// second way to say what the file already says.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Posture {
-    /// Relative to the directory the server runs in, which is the directory the
-    /// policy file's own paths are relative to.
-    pub policy: PathBuf,
-}
-
 /// The file, parsed and checked.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -1020,7 +1002,6 @@ pub struct Config {
     /// [`Config::held`].
     held: Option<Held>,
     providers: BTreeMap<String, Profile>,
-    postures: BTreeMap<String, Posture>,
     policies: crate::policies::Policies,
     images: BTreeMap<String, Image>,
     approvals: Option<agent_core::approval::Approvers>,
@@ -1081,8 +1062,6 @@ pub enum ConfigError {
     Render { message: String },
     #[error("there is no [provider.{name}] in {path}")]
     NoSuchProfile { path: String, name: String },
-    #[error("there is no [posture.{name}] in {path}")]
-    NoSuchPosture { path: String, name: String },
     #[error("{path}: {message}")]
     Policies { path: String, message: String },
     #[error("{path}: [image.{name}]: {problem}")]
@@ -1154,12 +1133,10 @@ impl Config {
             max_tool_steps: file.max_tool_steps,
             held: None,
             providers: file.provider,
-            postures: file.posture,
             policies: crate::policies::Policies {
                 shell: file.shell,
                 network: file.network,
                 files: file.files,
-                environments: file.environment,
             },
             images: file.image,
             approvals: file.approvals,
@@ -1183,7 +1160,7 @@ impl Config {
         config.check_images(path)?;
         config
             .policies
-            .check(config.postures.keys())
+            .check()
             .map_err(|message| ConfigError::Policies {
                 path: path.to_string(),
                 message,
@@ -1488,15 +1465,11 @@ impl Config {
             default: self.default.clone(),
             max_tool_steps: self.max_tool_steps,
             provider: self.providers.clone(),
-            // Carried through the editor untouched. The providers table is the
-            // only thing the page writes, and a writer that dropped the
-            // postures would delete them the first time somebody saved a URL.
-            posture: self.postures.clone(),
-            // The lists and environments too, for the same reason.
+            // Carried through the editor untouched: a writer that dropped the
+            // lists would delete them the first time somebody saved a URL.
             shell: self.policies.shell.clone(),
             network: self.policies.network.clone(),
             files: self.policies.files.clone(),
-            environment: self.policies.environments.clone(),
             image: self.images.clone(),
             approvals: self.approvals.clone(),
             ui: self.ui.clone(),
@@ -1555,9 +1528,8 @@ impl Config {
         })
     }
 
-    /// The same file with other lists and environments: what Settings →
-    /// Policies writes. Everything else — the providers, the postures, the
-    /// engines — is this config's, carried through as [`Config::from_parts`]
+    /// The same file with other lists: what Settings → Policies writes.
+    /// Everything else — the providers, the engines — is this config's, carried through as [`Config::from_parts`]
     /// carries the lists.
     pub fn with_policies(&self, policies: crate::policies::Policies) -> Self {
         Self {
@@ -1568,9 +1540,9 @@ impl Config {
 
     /// The file as an editor hands it back: a default and a set of profiles.
     ///
-    /// The postures are *this* config's, not the editor's: the page does not
-    /// write them, and one that arrived without them would be one that erased
-    /// them.
+    /// Every other table is *this* config's, not the editor's: the page does
+    /// not write them here, and one that arrived without them would be one
+    /// that erased them.
     pub fn from_parts(
         &self,
         default: Option<String>,
@@ -1583,7 +1555,6 @@ impl Config {
             // parses its own text, and a reader loads the file.
             held: None,
             providers,
-            postures: self.postures.clone(),
             policies: self.policies.clone(),
             images: self.images.clone(),
             approvals: self.approvals.clone(),
@@ -1598,15 +1569,6 @@ impl Config {
             projects: self.projects.clone(),
             server: self.server.clone(),
             auth: self.auth.clone(),
-        }
-    }
-
-    /// The file as Settings → Runtimes hands back the postures: every
-    /// `[posture.<name>]`, and everything else this config already had.
-    pub fn with_postures(&self, postures: BTreeMap<String, Posture>) -> Self {
-        Self {
-            postures,
-            ..self.clone()
         }
     }
 
@@ -1812,11 +1774,6 @@ impl Config {
         self.sessions.unwrap_or_default()
     }
 
-    /// Every posture the file names.
-    pub fn postures(&self) -> &BTreeMap<String, Posture> {
-        &self.postures
-    }
-
     /// `[approvals]`, where the file has one.
     pub fn approvals(&self) -> Option<&agent_core::approval::Approvers> {
         self.approvals.as_ref()
@@ -1835,19 +1792,9 @@ impl Config {
         }
     }
 
-    /// Every list and environment the file names, already checked.
+    /// Every list the file names, already checked.
     pub fn policies(&self) -> &crate::policies::Policies {
         &self.policies
-    }
-
-    /// One posture by name, or the refusal that says where to write it.
-    pub fn posture(&self, name: &str, path: &str) -> Result<&Posture, ConfigError> {
-        self.postures
-            .get(name)
-            .ok_or_else(|| ConfigError::NoSuchPosture {
-                path: path.to_string(),
-                name: name.to_string(),
-            })
     }
 }
 
@@ -3172,7 +3119,7 @@ mod tests {
         let before = config(
             "default = \"local\"\n\
              [provider.local]\nbackend = \"ollama\"\nurl = \"http://127.0.0.1:11434\"\n\
-             [posture.container]\npolicy = \"luu.container.toml\"\n\
+             [image.dev]\nref = \"luu-worker:dev\"\n\
              [ui]\nicon-theme = \"/tmp/theme.json\"\n",
         )
         .expect("the file loads");
@@ -3190,7 +3137,7 @@ mod tests {
         let after = config(&rendered).expect("what it wrote loads back");
         assert_eq!(after.default_name(), Some("local"));
         assert!(after.profiles().contains_key("local"), "{rendered}");
-        assert!(after.postures().contains_key("container"), "{rendered}");
+        assert!(after.images().contains_key("dev"), "{rendered}");
         assert!(after.ui().is_some(), "{rendered}");
         assert_eq!(
             after.resend().expect("the table it wrote").repeat,
@@ -3202,7 +3149,7 @@ mod tests {
         assert!(!rendered.contains("prune"), "{rendered}");
     }
 
-    /// Settings → Policies writes the lists and the environments, and only
+    /// Settings → Policies writes the lists, and only
     /// those: the providers beside them survive, and what was written loads.
     #[test]
     fn the_policies_are_written_whole_and_the_rest_is_kept() {
@@ -3214,8 +3161,7 @@ mod tests {
         .expect("loads");
         let lists = Config::from_toml(
             "[shell.tools]\nallow = [\"git\"]\ndeny = [\"curl\"]\n[network.off]\n\
-             [files.tree]\nallow = [{ path = \".\", access = \"read-write\" }]\n\
-             [environment.e]\nshell = \"tools\"\nnetwork = \"off\"\nfiles = \"tree\"\n",
+             [files.tree]\nallow = [{ path = \".\", access = \"read-write\" }]\n",
             "lists.toml",
         )
         .expect("loads")
@@ -3236,5 +3182,19 @@ mod tests {
             again.profiles().contains_key("here"),
             "the providers are kept"
         );
+    }
+
+    /// No compatibility: a file that still names a combination does not load,
+    /// by `deny_unknown_fields`, like any table luu never had.
+    #[test]
+    fn a_posture_or_an_environment_is_an_unknown_table() {
+        for table in [
+            "[posture.container]\npolicy = \"luu.container.toml\"\n",
+            "[shell.s]\n[network.n]\n[files.f]\n\
+             [environment.e]\nshell = \"s\"\nnetwork = \"n\"\nfiles = \"f\"\n",
+        ] {
+            let refused = Config::from_toml(table, "config.toml").expect_err("refused");
+            assert!(matches!(refused, ConfigError::Parse { .. }), "{refused}");
+        }
     }
 }

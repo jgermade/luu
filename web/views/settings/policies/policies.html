@@ -9,11 +9,10 @@
   // `RECORD/2026-10-22.policies-not-postures.WIP.md`, *two zones*.
   //
   // **A copy, saved at once or not at all.** The section edits a draft of the
-  // four tables and *Save* sends it whole: a rename reaches the environments
-  // that name the list in the same write, so the file never names a list that
-  // is not there. A list an environment names cannot be deleted — the button
-  // says which. What was saved is what the next session runs under; the live
-  // one keeps what it was built with.
+  // three tables and *Save* sends it whole. Nothing names a list but the
+  // dialog that starts a session, and a session copies the lists it starts
+  // with: a rename or a delete here reaches the next session, never one that
+  // is running or in the history.
   const [{ loadPolicies, savePolicies, loadProjectGrants, removeProjectGrant }, TextInput, Select, Button, SaveButton] = await C79.importAll([
     "@web/lib/policies.js",
     "@web/theme/default/components/text-input.html",
@@ -46,7 +45,7 @@
   let loading = true
   const copy = tables => JSON.parse(JSON.stringify({
     shell: tables?.shell || {}, network: tables?.network || {},
-    files: tables?.files || {}, environment: tables?.environment || {},
+    files: tables?.files || {},
   }))
   loadPolicies().then(result => {
     loading = false
@@ -79,10 +78,10 @@
   }
 
   $: editable = !!view?.editable
-  // How many lists and environments the draft moves away from the file.
+  // How many lists the draft moves away from the file.
   $: changes = !draft || !view ? 0 : (() => {
     const file = copy(view)
-    return ["shell", "network", "files", "environment"].reduce((sum, kind) => {
+    return ["shell", "network", "files"].reduce((sum, kind) => {
       const names = new Set([...Object.keys(draft[kind]), ...Object.keys(file[kind])])
       return sum + [...names].filter(name =>
         JSON.stringify(draft[kind][name]) !== JSON.stringify(file[kind][name])).length
@@ -101,8 +100,6 @@
     else delete list[zone]
     draft = { ...draft, [kind]: { ...draft[kind], [name]: list } }
   }
-  const usedBy = (kind, name) => Object.entries(draft?.environment || {})
-    .filter(([, environment]) => environment[kind] === name).map(([env]) => env)
 
   // What is being typed into each zone's field, and the access a path is
   // added with: `kind:name:zone` → value.
@@ -137,10 +134,7 @@
     if (draft[kind][to]) return (renaming = { ...renaming, error: `there is a [${kind}.${to}] already` })
     const lists = {}
     for (const name of Object.keys(draft[kind])) lists[name === from ? to : name] = draft[kind][name]
-    // The environments that name it follow, in the same write.
-    const environment = Object.fromEntries(Object.entries(draft.environment).map(([env, e]) =>
-      [env, e[kind] === from ? { ...e, [kind]: to } : e]))
-    draft = { ...draft, [kind]: lists, environment }
+    draft = { ...draft, [kind]: lists }
     renaming = null
   }
   const newList = kind => {
@@ -150,7 +144,6 @@
     startRename(kind, name)
   }
   const remove = (kind, name) => {
-    if (usedBy(kind, name).length) return
     const lists = { ...draft[kind] }
     delete lists[name]
     draft = { ...draft, [kind]: lists }
@@ -213,8 +206,7 @@
           </span>
           <span class="grow"></span>
           <Button :if="editable" size="sm" variant="ghost" @click="startRename(kind.key, name)">Rename</Button>
-          <Button :if="editable" size="sm" variant="ghost" :disabled="usedBy(kind.key, name).length > 0"
-                  :title="usedBy(kind.key, name).length ? `Named by ${usedBy(kind.key, name).map(e => `[environment.${e}]`).join(', ')} in config.toml` : 'Delete this list'"
+          <Button :if="editable" size="sm" variant="ghost" title="Delete this list"
                   @click="remove(kind.key, name)">Delete</Button>
         </header>
         <div :each="zone in zonesOf(kind.key)" :key="zone.key" class="zone" :data-zone="zone.key">

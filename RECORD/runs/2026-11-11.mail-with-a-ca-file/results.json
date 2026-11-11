@@ -1,0 +1,75 @@
+[
+  {
+    "case": "smtps-no-ca",
+    "url": "smtps://localhost:1465",
+    "ca-file": null,
+    "exit": 1,
+    "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtps://localhost:1465\n    1: Connection error: Connection error: invalid peer certificate: UnknownIssuer\n    2: Connection error: invalid peer certificate: UnknownIssuer\n    3: invalid peer certificate: UnknownIssuer",
+    "smtp saved": false,
+    "ca-file saved": false
+  },
+  {
+    "case": "smtps-with-ca",
+    "url": "smtps://localhost:1465",
+    "ca-file": "private-ca.pem",
+    "exit": 0,
+    "stderr": "A code went to owner-smtps-with-ca@example.test.\nThe code:",
+    "smtp saved": true,
+    "ca-file saved": true,
+    "mail": {
+      "to": [
+        "owner-smtps-with-ca@example.test"
+      ],
+      "subject": "Your luu code: <code>"
+    }
+  },
+  {
+    "case": "starttls-with-ca",
+    "url": "smtp://localhost:1587?tls=required",
+    "ca-file": "private-ca.pem",
+    "exit": 0,
+    "stderr": "A code went to owner-starttls-with-ca@example.test.\nThe code:",
+    "smtp saved": true,
+    "ca-file saved": true,
+    "mail": {
+      "to": [
+        "owner-starttls-with-ca@example.test"
+      ],
+      "subject": "Your luu code: <code>"
+    }
+  },
+  {
+    "case": "smtps-another-ca",
+    "url": "smtps://localhost:1465",
+    "ca-file": "another-ca.pem",
+    "exit": 1,
+    "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtps://localhost:1465\n    1: Connection error: Connection error: invalid peer certificate: UnknownIssuer\n    2: Connection error: invalid peer certificate: UnknownIssuer\n    3: invalid peer certificate: UnknownIssuer",
+    "smtp saved": false,
+    "ca-file saved": false
+  },
+  {
+    "case": "smtps-ca-wrong-name",
+    "url": "smtps://127.0.0.1:1465",
+    "ca-file": "private-ca.pem",
+    "exit": 1,
+    "stderr": "Error: the code could not be sent, and nothing was saved\n\nCaused by:\n    0: sending through smtps://127.0.0.1:1465\n    1: Connection error: Connection error: invalid peer certificate: certificate not valid for name \"127.0.0.1\"; certificate is only valid for DnsName(\"localhost\")\n    2: Connection error: invalid peer certificate: certificate not valid for name \"127.0.0.1\"; certificate is only valid for DnsName(\"localhost\")\n    3: invalid peer certificate: certificate not valid for name \"127.0.0.1\"; certificate is only valid for DnsName(\"localhost\")",
+    "smtp saved": false,
+    "ca-file saved": false
+  },
+  {
+    "case": "smtps-ca-missing",
+    "url": "smtps://localhost:1465",
+    "ca-file": "nope.pem",
+    "exit": 1,
+    "stderr": "Error: reading the mail server's CA from <out>/nope.pem\n\nCaused by:\n    No such file or directory (os error 2)",
+    "smtp saved": false,
+    "ca-file saved": false
+  },
+  {
+    "case": "login code from serve, under the saved ca-file",
+    "code request": 202,
+    "mail arrived": true,
+    "login": 204,
+    "cookie set": true
+  }
+]

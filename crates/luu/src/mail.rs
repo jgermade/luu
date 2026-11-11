@@ -11,6 +11,11 @@
 //! stays where it is and `password-ref = "file:/path"` names it, read on every
 //! send. Never an environment variable: every command a session runs inherits
 //! luu's environment, and on a public server those are other people's.
+//!
+//! **A private CA is a file, added to the public roots.** `ca-file` names a
+//! PEM whose certificates the mail server's may chain to, beside Mozilla's and
+//! for this host alone. See
+//! `RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +23,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::client::{Certificate, Tls, TlsParameters};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 use crate::provider::SmtpTable;
@@ -32,6 +38,9 @@ pub struct Mail {
     /// The file the password was read from when it is not luu's to write:
     /// a mounted secret. Saved as `password-ref`, and nothing is copied.
     pub mounted: Option<PathBuf>,
+    /// A PEM of certificates trusted beside the public roots, for this
+    /// server: `ca-file`. Read on every send.
+    pub ca_file: Option<PathBuf>,
 }
 
 /// Where the password goes, in the state directory.
@@ -67,6 +76,69 @@ impl Mail {
             user: table.user.clone(),
             password,
             mounted,
+            ca_file: table.ca_file.clone(),
+        })
+    }
+
+    /// The same settings, trusting the certificates in `path` as well.
+    pub fn with_ca_file(self, path: Option<PathBuf>) -> Self {
+        Self {
+            ca_file: path,
+            ..self
+        }
+    }
+
+    /// The certificates `ca-file` names, read now. A file that is not
+    /// there, is relative, or holds no certificate is a refusal naming it —
+    /// never the public roots alone, which would report a wrong path as a
+    /// server nobody signed.
+    fn extra_roots(&self) -> Result<Option<Certificate>> {
+        let Some(path) = &self.ca_file else {
+            return Ok(None);
+        };
+        let path = crate::provider::expand_home(path);
+        if !path.is_absolute() {
+            anyhow::bail!(
+                "ca-file `{}` is not an absolute path: luu reads it wherever it was started",
+                path.display()
+            );
+        }
+        let pem = std::fs::read(&path)
+            .with_context(|| format!("reading the mail server's CA from {}", path.display()))?;
+        if !pem
+            .windows(27)
+            .any(|window| window == b"-----BEGIN CERTIFICATE-----")
+        {
+            anyhow::bail!(
+                "{} holds no certificate: a CA file is PEM, one or more \
+                 `-----BEGIN CERTIFICATE-----` blocks",
+                path.display()
+            );
+        }
+        let certificate = Certificate::from_pem(&pem)
+            .with_context(|| format!("{} is not a PEM of certificates", path.display()))?;
+        Ok(Some(certificate))
+    }
+
+    /// The transport's TLS with `roots` trusted beside the public ones: what
+    /// `from_url` chose for this URL, made again with them. The name checked
+    /// is still the URL's host.
+    fn tls_with(&self, roots: Certificate) -> Result<Tls> {
+        let parsed = reqwest::Url::parse(&self.url)?;
+        let host = parsed.host_str().unwrap_or("").to_string();
+        let tls = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "tls")
+            .map(|(_, value)| value.into_owned());
+        let parameters = TlsParameters::builder(host)
+            .add_root_certificate(roots)
+            .build()
+            .context("the mail server's TLS, with its CA file")?;
+        Ok(match (parsed.scheme(), tls.as_deref()) {
+            ("smtps", _) => Tls::Wrapper(parameters),
+            (_, Some("required")) => Tls::Required(parameters),
+            (_, Some("opportunistic")) => Tls::Opportunistic(parameters),
+            _ => Tls::None,
         })
     }
 
@@ -124,6 +196,7 @@ impl Mail {
         self.from
             .parse::<lettre::message::Mailbox>()
             .with_context(|| format!("`{}` is not an address to send from", self.from))?;
+        self.extra_roots()?;
         Ok(())
     }
 
@@ -132,6 +205,9 @@ impl Mail {
         self.check()?;
         let mut transport = AsyncSmtpTransport::<Tokio1Executor>::from_url(&self.url)?
             .timeout(Some(Duration::from_secs(20)));
+        if let Some(roots) = self.extra_roots()? {
+            transport = transport.tls(self.tls_with(roots)?);
+        }
         if let (Some(user), Some(password)) = (&self.user, &self.password) {
             transport = transport.credentials(Credentials::new(user.clone(), password.clone()));
         }
@@ -186,6 +262,7 @@ impl Mail {
             user: self.user.clone(),
             password_file,
             password_ref,
+            ca_file: self.ca_file.clone(),
         })
     }
 }
@@ -288,6 +365,7 @@ mod tests {
             user: Some("luu".into()),
             password: Some("p".into()),
             mounted: None,
+            ca_file: None,
         };
         assert!(good.check().is_ok());
         let starttls = Mail {
@@ -387,7 +465,55 @@ mod tests {
             user: Some("luu".into()),
             password_file,
             password_ref,
+            ca_file: None,
         }
+    }
+
+    /// A CA file is read before anything is sent, and one that cannot be —
+    /// not there, relative, not PEM — is a refusal naming it, never a send
+    /// under the public roots alone. It is kept in the table, and may sit
+    /// where a password may not: a certificate is public.
+    #[test]
+    fn a_ca_file_is_read_before_a_send_and_kept_in_the_table() {
+        let dir = scratch("ca");
+        let good = Mail {
+            url: "smtps://mail.internal:465".into(),
+            from: "luu <luu@example.com>".into(),
+            ..Mail::default()
+        };
+        let refused = |path: &str| {
+            good.clone()
+                .with_ca_file(Some(PathBuf::from(path)))
+                .check()
+                .map(|()| String::new())
+                .unwrap_or_else(|error| format!("{error:#}"))
+        };
+        let missing = dir.join("nope.pem");
+        assert!(refused(missing.to_str().unwrap()).contains("nope.pem"));
+        assert!(refused("ca.pem").contains("not an absolute path"));
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, "not a certificate\n").unwrap();
+        assert!(refused(text.to_str().unwrap()).contains("holds no certificate"));
+        let broken = dir.join("broken.pem");
+        std::fs::write(
+            &broken,
+            "-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        assert!(refused(broken.to_str().unwrap()).contains("broken.pem"));
+
+        // In the table as written, and back out of it.
+        let with = good.clone().with_ca_file(Some(missing.clone()));
+        let saved = with.save(&dir).unwrap();
+        assert_eq!(saved.ca_file.as_deref(), Some(missing.as_path()));
+        assert_eq!(Mail::from_table(&saved).unwrap().ca_file, Some(missing));
+        // `/etc` is refused for a password, and is where a CA usually is.
+        let under_etc = SmtpTable {
+            ca_file: Some(PathBuf::from("/etc/ssl/private-ca.pem")),
+            ..table(None, None)
+        };
+        assert!(Mail::from_table(&under_etc).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

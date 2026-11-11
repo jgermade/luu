@@ -10,7 +10,7 @@
 #   docker exec luu cat /state/token
 #
 # The download is checked against the release's own `SHA256SUMS`. The context
-# is the checkout, for `deploy/luu.toml` and `deploy/entrypoint.sh`; nothing of
+# is the checkout, for `deploy/entrypoint.sh`; nothing of
 # the source is compiled. See RECORD/2026-10-30.three-ways-in.WIP.md.
 
 FROM rust:1-bookworm AS fetch
@@ -54,12 +54,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ripgrep \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --create-home --home-dir /state --shell /bin/bash luu \
- && mkdir -p /work /etc/luu \
+ && mkdir -p /work \
  && chown luu:luu /state /work
 COPY --from=fetch /luu /usr/local/bin/luu
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
 COPY --from=web /web/node_modules/@xterm /usr/share/luu/web/node_modules/@xterm
-COPY deploy/luu.toml /etc/luu/luu.toml
 COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
 
 ENV LUU_HOME=/state \

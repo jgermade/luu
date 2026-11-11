@@ -218,15 +218,15 @@
   const zonesOf = list => list === "files" ? ["allow"] : ZONES
   const LISTS = ["shell", "network", "files"]
   const lists = () => state.settings?.lists || null
-  // Where a list is written: its own table under an environment, and the
-  // policy file's `[sandbox]` otherwise, which has no lists by name.
+  // Where a list is written: its own table in `config.toml`. A one-shot's
+  // policy file has `[sandbox]` instead, and no lists by name — never a
+  // session of this page, and kept for a recording of one.
   const SANDBOX = { shell: "[sandbox] commands", network: "[sandbox] network", files: "[[sandbox.paths]]" }
   // Made from lists, one not chosen is the empty one, which has no table.
-  const sourceOf = list => !lists()?.environment ? SANDBOX[list]
-    : lists().composed && lists()[list].name === "(empty)" ? "empty: names nothing"
+  const sourceOf = list => !lists()?.composed ? SANDBOX[list]
+    : lists()[list].name === "(empty)" ? "empty: names nothing"
     : `[${list}.${lists()[list].name}]`
   $: listsSaid = lists()?.composed ? "made from the lists chosen when it started"
-    : lists()?.environment ? `[environment.${lists().environment}]`
     : `from ${lists()?.shell?.name || "the policy file"}`
   const ENFORCEMENT = {
     "kernel": "a command runs only where the kernel holds it — Landlock and seccomp, which are Linux's. Where they are missing, every command is refused; enforcement = \"best-effort\" runs it and says what was missing.",

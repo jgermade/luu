@@ -40,11 +40,10 @@ wget -qO- https://jgermade.github.io/luu/setup.sh | sh
 
 After an install it asks how luu runs here. **local** is all of the above: for
 you, on `127.0.0.1`, no login. **online** is for people who log in — Linux with
-systemd, and root through `sudo`. It does five things:
+systemd, and root through `sudo`. It does four things:
 
 - puts the binary in `/usr/local/bin`;
 - makes a system user `luu` whose home `/var/lib/luu` is the state directory;
-- writes `/etc/luu/luu.toml`;
 - writes your domain into its `[server]` (`luu config server`);
 - starts `luu.service`, and prints a one-time link to finish in the page, with
   a QR code of it for your phone. The page sets how it sends mail, and makes

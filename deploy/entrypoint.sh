@@ -6,12 +6,6 @@
 set -eu
 state="${LUU_HOME:-/state}"
 
-# The image's CARGO_HOME, for `docker exec … cargo`. Sessions' commands no
-# longer use it (deploy/luu.toml sends theirs to the session's `.tmp`), but a
-# mounted policy from before may still grant it, and a granted path has to
-# exist: on an empty volume it does not until something makes it.
-mkdir -p "${CARGO_HOME:-$state/cargo}"
-
 if [ ! -f "$state/config.toml" ]; then
   if [ -n "${LUU_ORIGIN:-}" ]; then
     # A name a browser types: users, and the page asks for the setup key
@@ -33,4 +27,6 @@ fi
 # Read it with `cat $state/token`; it is never printed.
 luu token "$state/token" --if-missing
 
-exec luu serve --sandbox /etc/luu/luu.toml "$@"
+# No policy file: a session is made from the lists in config.toml (Settings →
+# Policies), chosen when it starts, and from none it asks.
+exec luu serve "$@"

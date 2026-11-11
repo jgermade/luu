@@ -1,14 +1,11 @@
 // @ts-check
-/// Where a session's commands may run, as a list a picker offers: the
-/// server's own policy file, every `[posture.<name>]` in `config.toml` and
-/// every `[environment.<name>]` beside them,
-/// each on its own runtime first and — where it is contained — on every other
-/// container runtime after it. One list for the terminal's foot, which moves
-/// a session, and the session starter, which opens one. See
-/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
-///
-/// The value is `posture|runtime`: the posture's name (`""` is the server's
-/// own) and the runtime where it is not the one that posture names.
+/// Where a session's commands may run, as a list a picker offers: this
+/// machine, and every image `config.toml` names on every container runtime.
+/// One list for the session starter, which opens a session, and the Runtime
+/// dialog, which moves one. Nothing here is a name: a session is a runtime
+/// and three lists it copied, and where it runs is the only part that moves.
+/// See `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md` and
+/// `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
 import { brandSrc, runtimeBrand } from "./brands.js"
 
 /// How a place reads: by where it runs, which is the question both pickers
@@ -17,74 +14,26 @@ const runs = place => !place ? "?"
   : place.runtime === "direct" ? "direct (no container)"
   : place.image ? `${place.runtime} · ${place.image}` : place.runtime
 
-/// `[{ value, posture, runtime, where, name, label, title, disabled }]` out of what
-/// `/api/postures` answered. A runtime this machine does not have is in the
-/// list, disabled, saying so.
-export function placeOptions(postures) {
-  const option = (name, label, place, declared) => {
-    const runtime = place?.runtime === declared ? "" : place?.runtime || ""
-    return {
-      value: `${name}|${runtime}`,
-      posture: name,
-      runtime,
-      // The runtime it runs on, variant or not: what its mark is.
-      where: place?.runtime || "",
-      name: label,
-      label: runs(place),
-      title: place?.missing
-        ? `${label} — ${place.missing}`
-        : `${label} · ${place?.policy || ""}${place?.gap ? ` · ${place.gap}` : ""}`,
-      disabled: !!place?.missing,
-    }
-  }
-  const variants = (name, label, places) =>
-    (places || []).map(place => option(name, label, place, places[0]?.runtime))
-  return [
-    ...variants("", "server default", postures?.own),
-    ...[...Object.keys(postures?.postures || {}), ...(postures?.environments || [])].flatMap(name =>
-      variants(name, name, postures?.places?.[name])),
-  ]
-}
-
-/// Which of `placeOptions` the live session is, from `/api/terminal`'s
-/// `posture` — `{ name, runtime }`, the runtime a word and maybe an image
-/// after it: its posture, and the runtime only where it is not the one that
-/// posture names.
-export function livePlace(postures, live) {
-  const name = live?.name || ""
-  const runtime = (live?.runtime || "").split(" ")[0]
-  const declared = (name ? postures?.places?.[name] : postures?.own)?.[0]?.runtime
-  return `${name}|${runtime && runtime !== declared ? runtime : ""}`
-}
-
-/// The live session's place as `placeOptions` draws one: the option it is,
-/// or — for a session made from lists, which is no posture and so none of
-/// them — one made from where `/api/terminal` says it runs (`composed`, or
-/// the worker's label), so the foot and the dialog still name it. `null`
-/// until the server has said.
-export function hereOption(postures, live) {
+/// Where the live session runs, drawn as `runtimeOptions` draws a place,
+/// from `/api/terminal`'s `posture`: `composed` — the runtime and image it
+/// was made on — or the worker's label (`docker (luu-worker:dev)`, `host`,
+/// `direct (no container)`). `null` until the server has said.
+export function hereOption(live) {
   if (!live) return null
-  const value = livePlace(postures, live)
-  const found = placeOptions(postures).find(option => option.value === value)
-  if (found) return found
-  // `docker (luu-worker:dev)`, `host`, `direct (no container)`.
   const [word, rest] = (live.runtime || "").split(" ")
   const runtime = live.composed?.runtime || word || "host"
   const image = live.composed?.image || (rest?.startsWith("(") && rest !== "(no" ? rest.slice(1, -1) : null)
   const place = { runtime, image }
   const name = live.name || "this session"
   return {
-    value,
-    posture: live.name || "",
-    runtime: "",
+    value: `${runtime}|${image || ""}`,
+    runtime,
     where: runtime,
     name,
     image,
     label: runs(place),
     title: `${name} · ${runs(place)}`,
     disabled: false,
-    // Not one a picker offers: drawn as where the session is, never chosen.
-    made: true,
   }
 }
 
@@ -97,20 +46,11 @@ export function placeMark(where) {
   return { src, glyph: src ? null : "#i-box" }
 }
 
-/// `value` if it is still a place that can be chosen, else the server's own.
-/// A remembered place may name a posture since taken out of `config.toml`, or
-/// a runtime this machine no longer has.
-export function stillThere(postures, value) {
-  const found = placeOptions(postures).find(option => option.value === value && !option.disabled)
-  return found ? found.value : "|"
-}
-
-/// Where a session made from lists may run, out of `/api/postures`'
+/// Where a session may run, out of `/api/postures`'
 /// `runtimes`: this machine, and every image `config.toml` declares on every
 /// container runtime — `[{ value, runtime, image, where, label, title, gap,
 /// disabled }]`, the value `runtime|image`. The new session's *Runtime*, and
-/// since 2026-10-30 where the Runtime dialog moves a session that carries its
-/// lists; see `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
+/// where the Runtime dialog moves a session; see `RECORD/2026-10-30.a-session-carries-its-policies.completed.md` §2.
 /// `gap` is what that place cannot hold: the container's network on Apple's
 /// `container`, or this machine's kernel.
 export function runtimeOptions(postures) {
@@ -125,7 +65,3 @@ export function runtimeOptions(postures) {
     disabled: !!place.missing,
   }))
 }
-
-/// Whether the live session carries its lists (format 26), and so moves by
-/// runtime and image rather than by a posture's name.
-export const carriesLists = live => !!live?.lists?.copied

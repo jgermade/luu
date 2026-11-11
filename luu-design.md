@@ -1113,45 +1113,56 @@ access = "execute"
   default seccomp profile. Until 2026-09-08 every contained run in this
   repository was Docker Desktop on macOS, by hand, once. See
   [`RECORD/2026-09-08.the-container-on-a-runner.completed.md`](RECORD/2026-09-08.the-container-on-a-runner.completed.md).
-- **A session is made from a runtime, an image and lists, and the container's
-  lifetime is the session's.** Until 2026-10-30 what was chosen was a *posture*
-  — the policy file, which decided the sandbox and the seam together, on purpose.
-  That purpose did not survive the lists: a posture moved what a session may do
-  with where it runs, so *Docker with no network* was a second file. **Postures
-  are gone from every surface**: nothing offers or writes one, and a
-  `[posture.<name>]` still in `config.toml` is read as an environment of the same
-  name (`policies::Resolved::of_posture` — its file's sandbox unchanged, three
-  lists named after it), so a session recorded on one resumes on it. See
-  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
-  step 4. What the rest of this entry says of a posture is how it worked, and how
-  an environment by name still does:
+- **A session is a runtime, an image and three lists it copied, and the
+  container's lifetime is the session's.** The permissions are the instance's:
+  `[shell.<name>]`, `[network.<name>]` and `[files.<name>]` in the state
+  directory's `config.toml`, each in two zones, `allow` and `deny` — what
+  neither names is asked (the loader refuses an `ask` zone). A session takes
+  the ones a person chose, **whole**, into its own header
+  (`record::Copied`, beside each list's name and SHA-256), and nothing names a
+  combination: `[posture.*]` and `[environment.*]` are unknown tables since
+  2026-11-10, and a `config.toml` that still has one does not load. **`serve`
+  reads no policy file** — not `./luu.toml`, and `--sandbox` is refused there —
+  so its first session, and one asked for with nothing, is this machine with
+  three empty lists: it reads its folder, writes to scratch and asks the rest.
+  The `--allow-*` flags still add to every session of the `serve` they were
+  typed on, and are in its header. See
+  [`RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`](RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md),
+  and for how it got here
+  [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md)
+  and
+  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md).
 
-  ```toml
-  [posture.container]
-  policy = "luu.container.toml"
-  ```
-
-  `POST /api/sessions {provider, model, posture}` resolves it **before** anything
-  is reset, so a runtime that is not installed refuses the new session rather
-  than ending the one that is running; the worker the previous posture started is
+  `POST /api/sessions {provider, model, runtime, image, lists}` is
+  `Policies::compose`, from the file as it is now, **before** anything is
+  reset, so a runtime that is not installed refuses the new session rather
+  than ending the one that is running; the worker the previous one started is
   then ended rather than dropped, because `kill_on_drop` gets to a container
-  "eventually". The browser never types a path, for the reason it never types a
-  URL: what may be chosen is bounded by what somebody wrote on this machine, and
-  the names are read once when the server starts. **A resume may not move it** —
-  a destination is where a session sends and a posture is what it may do, and its
-  jobs were approved against this one. **The live session may, between jobs**:
-  `PUT /api/session/posture` (the terminal panel's environment picker) is refused
-  while a turn runs, a proposal waits at the gate or an approved job is open, and
-  otherwise swaps the agency, ends the old worker and writes a header line, so the
-  fold's *last header wins* says from where on the session ran somewhere else.
-  **A session that carries its lists moves by runtime alone** (since 2026-10-30):
-  `PUT /api/session/runtime {runtime, image}` makes it again from its copy on the new place
-  (`Policies::recompose`), so its lists, grants and forbiddens go with it; it waits for a
-  turn and the gate, and **not** for an approved job, since the policy does not move with the
-  place. What can change is what holds the lists, and the picker says it before the move — a
-  place's `gap` is this machine's kernel gap on the host (`sandbox::host_gap`). A session on a
-  posture or the server's own file still moves by name. See
-  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md) §2.
+  "eventually". It is named by its lists (`tools · registries · empty`, or
+  `empty`) and recorded with `record::Composed`, the runtime and image it was
+  asked with. A body that names a `posture` is refused, saying what a session
+  is made from. The browser never types an image, for the reason it never
+  types a URL: what may be chosen is bounded by what somebody wrote on this
+  machine.
+
+  **A resume makes it again from its copy** (`Policies::recompose`), on the
+  runtime and image it ran on unless the body names others — so a list edited,
+  renamed or deleted since changes nothing about a session that started on
+  it. What it may do does not move: a destination is where a session sends,
+  its lists are what its jobs were approved against, and a resume that names
+  other lists is compared on the three facts and the hashes, and refused. A
+  session whose stream names lists and has no copy of them — one recorded
+  under a policy file — is read and exported, and not resumed (409).
+
+  **The live session moves by runtime alone**: `PUT /api/session/runtime
+  {runtime, image}` makes it again from its copy on the new place, so its
+  lists, grants and forbiddens go with it; it waits for a turn and the gate,
+  and **not** for an approved job, since the policy does not move with the
+  place; it swaps the agency, ends the old worker and writes a header line, so
+  the fold's *last header wins* says from where on the session ran somewhere
+  else. What can change is what holds the lists, and the picker says it before
+  the move — a place's `gap` is this machine's kernel gap on the host
+  (`sandbox::host_gap`). There is no move by name.
   **What a container gained goes with a move only when asked**: the sixth tool, `install`
   (`{packages}`, apt only), runs in a container as its root from the host
   (`<runtime> exec --user 0`), outside the worker's Landlock, held to the shell list as the
@@ -1161,57 +1172,33 @@ access = "execute"
   (`reinstall: true`) asks the next container for it before the move is answered — at once,
   then one package at a time, the session staying where it moved and naming what is missing.
   It costs every prompt ~280 bytes of tool block.
-  **Since 2026-10-22 a session may name an environment instead**: `[shell.<name>]`,
-  `[network.<name>]` and `[files.<name>]` lists in two zones, `allow` and `deny` — what
-  neither names is asked (**since 2026-10-23**; the loader refuses an `ask` zone) — and
-  `[environment.<name>]` naming one of each with its runtime — resolved into the same sandbox
-  and worker, with the working directory read whatever the files list says, and recorded by
-  each list's name and SHA-256 in the header's posture (`record::FORMAT` 21), which a resume
-  compares. See
-  [`RECORD/2026-10-22.policies-not-postures.WIP.md`](RECORD/2026-10-22.policies-not-postures.WIP.md).
   **Settings → Policies edits the lists**: each by name, its entries by zone (a files list in
-  `allow` only, since a files `deny` is refused until it can be held), new, renamed (the
-  environments that name it follow in the same write) and deleted (not while an environment
-  names it), sent whole to `PUT /api/policies` and checked by the loader that reads the file
-  back; the environments are resolved again on every save, so the next session on one runs
-  under the lists as written. The live session keeps what it was built with.
-  **The new session's dialog makes every session from a runtime and three lists** (since
-  2026-10-23; there is no preset to start from): where it runs — this machine, or an image
-  `config.toml` declares, on any container runtime this machine has (`/api/postures`'
-  `runtimes`), so the dialog never names an image of its own. **Since 2026-10-30 an image
-  is a table of its own**, `[image.<name>]` — its `ref` and the in-image paths the host must
-  not resolve — written from Settings → Runtimes (`PUT /api/images`, a browser on this
-  machine only) and offered first; an image a posture or an environment names is still
-  offered after them until postures go
-  ([`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md)
-  §2), and last the one `serve` was started on (`--worker-image`, or its own `[worker]
-  image`) — which the flag moves every offered place onto, and which the chart's
-  `--worker kubernetes` makes the only one
-  ([`RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`](RECORD/2026-11-08.the-image-serve-was-started-on.completed.md)). The shell,
-  network and files lists by name, an unchosen one the empty list (read the folder, ask the
-  rest), what the last session used offered first — the runtime with what choosing it means
+  `allow` only, since a files `deny` is refused until it can be held), new, renamed and
+  deleted — nothing else in the file names a list, and a session has its copy — sent whole
+  to `PUT /api/policies` and checked by the loader that reads the file back. The next session
+  sees what was written; the live one keeps its copy.
+  **The new session's dialog** offers where it runs — this machine, or an image this machine
+  names, on any container runtime it has (`/api/postures`' `runtimes`; the route kept its
+  name) — and one list of each axis, an unchosen one the empty list, what the last session
+  used offered first. **An image is a table of its own**, `[image.<name>]` — its `ref` and
+  the in-image paths the host must not resolve — written from Settings → Runtimes
+  (`PUT /api/images`, a browser on this machine only); and beside them the one `serve` was
+  started on (`--worker-image`), which the flag moves every offered place onto, and which
+  the chart's `--worker kubernetes` makes the only one
+  ([`RECORD/2026-11-08.the-image-serve-was-started-on.completed.md`](RECORD/2026-11-08.the-image-serve-was-started-on.completed.md)).
+  The runtime is drawn with what choosing it means
   beside it, as tall as the field's box: this machine as the person, its terminal the whole
   account; or the folder and the image's tools, no network a list does not allow (see
   [`RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md`](RECORD/2026-10-27.a-runtime-says-what-it-means.completed.md));
   and where it sends, in the chat dropup's two
   columns (`provider-models.html`, one component for both; in Settings → Models
   the head's mark and name are the button that edits the provider, a pencil
-  right after the name). `POST /api/sessions` with `lists`
-  and no posture is `Policies::compose`, named by its lists and recorded with
-  `record::Composed` — the runtime and image it was asked with (`record::FORMAT` 24) — so a
-  resume from the history asks for the same again. **And it carries its lists**: since
-  2026-10-30 each is copied, as written, into the header beside its hash
-  (`record::Copied`, `record::FORMAT` 26), and a resume makes the session again from the copy
-  (`Policies::recompose`) rather than from `config.toml` by name — so a list edited, renamed
-  or deleted since changes nothing about a session that started on it, and no longer refuses
-  its resume. See
-  [`RECORD/2026-10-30.a-session-carries-its-policies.completed.md`](RECORD/2026-10-30.a-session-carries-its-policies.completed.md).
-  With a posture or an environment it is as
-  before (`resolve_with` swaps an environment's lists; a posture's lists are its policy file).
-  **Settings → Runtimes wrote the postures table** from 2026-10-01
-  ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md))
-  until 2026-10-30, when the section and `PUT /api/postures` went; it writes the
-  images now.
+  right after the name).
+  **`luu chat`, `tools`, `map` and `select` still take a policy file** —
+  `--sandbox FILE`, or `./luu.toml` where it is — and `[worker]` out of it: a
+  one-shot is not a session a person composes, and every measured run here was
+  made under one. That is the part of this still planned to change
+  ([`ROADMAP/`](ROADMAP/), row 50).
   **And one container runtime may be the default**: `[runtimes] default`,
   written from its card (`PUT /api/runtimes/default`; `host`, written as no
   table, is this machine again), is where sessions start — the first one of
@@ -1245,12 +1232,11 @@ access = "execute"
   **What that rule compares, since 2026-09-17.** The fold keeps the posture its
   stream's last header names, and a resume refuses — 409, naming both sides —
   when the server is not in the same place: the **three facts**, never the name,
-  because the file behind a name can be edited tomorrow. A body may name a
-  posture and is admitted only when it resolves to those same three facts, so
-  the endpoint says *which one you mean* rather than *move this session*; the
-  page reads it off the session and says it back. It refuses rather than
-  rebuilding the posture itself, because building one can start a container and
-  a click on a row in the history is not a request to start one. A stored
+  because what is behind a name can be edited tomorrow. Since 2026-10-30 the
+  session is made again from the lists it copied, on the runtime and image it
+  ran on, which the page reads off the session and says back; a body that
+  names other lists is admitted only when they resolve to those same facts and
+  hashes. A stored
   posture of `None` is **unknown** — a recording from before format 10 — and is
   let through rather than guessed at; the retarget header, which is now written
   when the posture moves and not only when the destination does, is then the one
@@ -1330,14 +1316,13 @@ open thing (`cut at 512 KB`, a diff's two sides) and at the far right **the term
 toggle, lit while it is up. The terminal is a panel, dark whatever the page is, *above* that
 foot, and while it is up the foot carries its controls too (*Runtime*: a button naming where the
 session runs, with its runtime's mark, that opens **a dialog that moves the session** — every
-place by where it runs, `host`, `docker · luu-worker:dev`, with its mark and the posture and its
-file under each, a runtime this machine lacks offered off, a contained posture on every
-container runtime since they share the image and the argv, a host posture once — the same list
-the session starter offers; a move waits on a box that says what stays behind, what the model
+place by where it runs, `host`, `docker · luu-worker:dev`, with its mark, a runtime this
+machine lacks offered off, an image on every container runtime since they share the image and
+the argv, this machine once — the same list the session starter offers; a move waits on a box that says what stays behind, what the model
 installed where the session runs now, and a container it leaves goes with everything in it. The
 dialog is mounted at the page's root, so it takes the page's tone and not the foot's: [`RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md`](RECORD/2026-10-27.the-runtime-is-moved-in-a-dialog.completed.md).
-A session made from lists is no posture, and is named by where it runs all the same — `host`,
-`podman · luu-worker:dev` — in the foot and first in the dialog; and a new session whose
+A session is named by where it runs — `host`, `podman · luu-worker:dev` — in the foot and in
+the dialog; and a new session whose
 commands run elsewhere — a container of its own, or this machine instead of one — ends the open
 shell and opens it again there (`followSession`): [`RECORD/2026-10-27.the-new-session-s-runtime-in-the-foot.completed.md`](RECORD/2026-10-27.the-new-session-s-runtime-in-the-foot.completed.md).
 A new session is offered where the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
@@ -1373,8 +1358,11 @@ it does not reflow the name being pointed at. See
 **The pencil renames** (so does F2 on a row): the name becomes a field, Enter or leaving it
 renames, ESC puts it back, and a refusal is said under the row with the field still open. It is
 `POST /api/workspace/rename` with a new *name*, never a path, so a rename cannot become a move;
-a name already taken is a 409, not an overwrite; both ends are checked by the sandbox for
-`read-write`, so a posture that only reads refuses it; and only a page on this machine may ask,
+a name already taken is a 409, not an overwrite; both ends are held to the session's *folder*
+and not to its files list — **what a list grants is what a tool may do, and a rename or a new
+folder in the page is the person's**, as its terminal on this machine is, since 2026-11-11
+([`RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`](RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md));
+and only a page on this machine may ask,
 by the bound address and by `Host`, as for Settings' writes. An open tab and the expanded
 folders follow what was renamed. See
 [`RECORD/2026-10-21.the-tree-renames.completed.md`](RECORD/2026-10-21.the-tree-renames.completed.md).
@@ -1712,8 +1700,8 @@ and the token keep, and a run that breaks it (`loopback` on `0.0.0.0`, `private`
 with no token) is refused. `luu token <PATH>` makes a token in a file created
 `0600`. `origin` is what a browser types when a proxy stands in front, accepted as
 an `Origin` beside the request's `Host`. `deploy/` is that server in a container
-(`deploy/Containerfile`, whose tools run in the container itself, as user `luu`,
-under `deploy/luu.toml`) and behind Caddy (`deploy/compose.yaml`); the first start
+(`deploy/Containerfile`, whose tools run in the container itself, as user `luu`)
+and behind Caddy (`deploy/compose.yaml`); the first start
 writes `[server]` into the state volume: `luu config server --origin` where
 `LUU_ORIGIN` names the server (the chart's ingress, compose's domain), else
 `private` and the token. The image carries xterm.js under `LUU_UI_DIR`, so the
@@ -1748,21 +1736,21 @@ carry their owner (`sessions.owner`, schema 6; rows from before it are the
 owners'); another user's session, by path, by `?session=` or on a socket, is a
 `404`, not a `403`, an owner included. `max-live` counts per user. The folder
 picker browses only the user's folder, and **a user's agency is refused where
-its policy grants a path that holds the root or reaches another user's
-folder** — a check on the policy, not a policy, so a deployment's file cannot
-widen it; `deploy/luu.toml` grants `.` (the session's folder) for that reason.
-Writable paths outside the root are shared by every user, and `serve` names
-them when it starts; `deploy/luu.toml` has none since 2026-11-04, when its
-`/state/cargo` turned out to carry one user's code into another's `cargo run`
-and `[sandbox.env]` moved each session's cargo home into its own `.tmp`. A host shell is an owner's only.
+its lists grant a path that holds the root or reaches another user's
+folder** — a check on the policy, not a policy, so no list an admin writes
+can widen it. Writable paths outside the root are shared by every user, and
+`serve` names them when it starts. (Until 2026-11-10 a deployment shipped a
+policy file, `deploy/luu.toml`, for the first session; a session reads none
+now, and with it went the `[sandbox.env]` that gave each session its own
+cargo home — a list has no `env` yet.) A host shell is an owner's only.
 
 **Settings are written by role**, read per request beside the loopback flag
 (`may_write(state, Role)`):
 
 | Level | Who | What |
 | --- | --- | --- |
-| shared inside luu | admin, owner | providers and their probe, the tool limit, policy lists and environments, resend rules, authority notes |
-| the machine | owner | engines, runtimes (install, start, images, postures, the host shell rule), the icon theme, brand marks |
+| shared inside luu | admin, owner | providers and their probe, the tool limit, policy lists, resend rules, authority notes |
+| the machine | owner | engines, runtimes (install, start, images, the host shell rule), the icon theme, brand marks |
 
 A user writes none of it, and a refusal says the role, not the address. For a
 login the `Host` check against DNS rebinding is skipped: the cookie is
@@ -1821,8 +1809,14 @@ page reloads.
    - `smtp://` without `tls=required` is refused except to this machine:
      with no `tls`, and with `tls=opportunistic`, which falls back to the
      clear when the server offers no STARTTLS.
-   - Only certificates under Mozilla's roots (`webpki-roots`) are trusted:
-     not the system's store, so a relay on a private CA is refused.
+   - Certificates under Mozilla's roots (`webpki-roots`) are trusted, not
+     the system's store — **and those in `ca-file`, beside them**, since
+     2026-11-11: a PEM `[auth.smtp]` names (`--smtp-ca-file`), for a relay on
+     a private CA. For the mail server alone, read on every send; the name is
+     still checked against the URL's host, and a file that does not load
+     refuses the send rather than falling back. The setup page has no field
+     for it. See
+     [`RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md`](RECORD/2026-11-11.a-ca-file-for-the-mail-server.completed.md).
    - A password inside the URL is refused.
    - **A password mounted for luu stays where it is**:
      `--smtp-password-ref file:/run/secrets/luu/smtp-password` saves
@@ -1857,13 +1851,12 @@ root. **online** is Linux with systemd, each root step through `sudo`:
 - the binary in `/usr/local/bin`;
 - a system user `luu` whose home `/var/lib/luu` is the state directory, with
   `work/` as `serve`'s root;
-- `/etc/luu/luu.toml` when there is none;
 - `luu config server` as `luu`, for the origin;
 - a `luu.service` held by `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`
   and `NoNewPrivileges`, writable only in `/var/lib/luu`.
 
 An online install is known afterwards by its unit: `reinstall` restarts it, and
-`uninstall --purge` removes the unit, the binary, `/var/lib/luu`, `/etc/luu` and
+`uninstall --purge` removes the unit, the binary, `/var/lib/luu` and
 the user. It ends by printing the setup link (and `luu config` as the
 terminal's way). In Docker and the chart the online steps are `luu config`
 through `exec`, and a restart. **In the chart TLS is the Ingress's**: a Secret
@@ -2506,7 +2499,7 @@ was made under — unreachable from any command line.
 
 A session resolves its rules in three levels: **what it asked for**, else **what
 the file says**, else **what is already running**. The file is re-read at every
-session start, which is `posture_for`'s rule and not the postures list's — a
+session start, as the lists are — a
 table the page itself writes has to reach the next session, or saving it does
 nothing.
 

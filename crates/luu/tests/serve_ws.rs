@@ -166,30 +166,29 @@ async fn server_full(
     server_authed(replies, delay, policy, budget, None).await
 }
 
-/// How a session's posture is built here: the policy file it names, resolved
-/// against this crate's directory, with no worker.
+/// How a session's agency is built here: with no worker, over this crate's
+/// directory.
 ///
-/// The real one is the command line's flags with one field replaced. This is
-/// the same shape and the same rules — an explicit file that is not there is an
-/// error, and a session that names none gets the server's own — so a test can
-/// assert what a posture *does* without a container in the way. See
-/// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+/// The real one is the command line's flags over the lists a session copied.
+/// This is a stand-in with one difference, on purpose: a session that chose
+/// no lists gets `SandboxPolicy::default()` rather than three empty ones, and
+/// records none, so what these tests assert about a turn's tools is not also
+/// a test of what an empty list asks. What `serve` makes of lists is
+/// `policies.rs`'s tests and the page's specs.
 fn agency_factory() -> luu::serve::AgencyFactory {
     agency_factory_rooted(std::env::current_dir().expect("the working directory"))
 }
 
-/// Where a posture would run, as the picker shows it: the policy file's
-/// `[worker]` block and nothing else, like the binary's own.
+/// Where a session would run, as the picker shows it: its place and nothing
+/// else, like the binary's own.
 fn describe_factory() -> luu::serve::DescribeFactory {
     Arc::new(
         |chosen: Option<luu::serve::Chosen>, runtime: Option<agent_core::worker::Runtime>| {
-            let path = match chosen {
-                Some(luu::serve::Chosen::File(path)) => path,
-                _ => "luu.toml".into(),
-            };
-            let config = agent_core::worker::WorkerConfig::from_file(&path).unwrap_or_default();
+            let config = chosen
+                .map(|chosen| chosen.worker.clone())
+                .unwrap_or_default();
             luu::serve::Where {
-                policy: path.display().to_string(),
+                policy: "the test's".into(),
                 runtime: runtime.unwrap_or(config.runtime).as_str().to_string(),
                 image: config.image,
                 missing: None,
@@ -209,18 +208,15 @@ fn describe_factory() -> luu::serve::DescribeFactory {
 /// from.
 fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
     // The runtime is not honoured here: no test builds a worker, and what the
-    // routes decide about a variant is decided before this is called.
+    // routes decide about a place is decided before this is called.
     Arc::new(
-        move |chosen: Option<luu::serve::Chosen>, _runtime, folder| {
+        move |chosen: luu::serve::Chosen, _runtime, folder: Option<std::path::PathBuf>| {
             // A session's folder is its base, where it named one.
             let base = folder.unwrap_or_else(|| base.clone());
             Box::pin(async move {
-                let policy = match chosen {
-                    Some(luu::serve::Chosen::File(path)) => SandboxPolicy::from_file(&path)?,
-                    Some(luu::serve::Chosen::Environment(environment)) => {
-                        environment.policy.clone()
-                    }
-                    None => SandboxPolicy::default(),
+                let policy = match chosen.name.as_str() {
+                    "empty" => SandboxPolicy::default(),
+                    _ => chosen.policy.clone(),
                 };
                 Ok(Agency::new(
                     Arc::new(Tools::standard()),
@@ -309,9 +305,6 @@ async fn server_storing_selecting(
         store: Some(path.to_path_buf()),
         agency_for: Some(agency_factory_rooted(base.clone())),
         describe_for: None,
-        postures: Default::default(),
-        environments: Default::default(),
-        postures_path: None,
     })
     .await
     .expect("binding the server");
@@ -366,9 +359,6 @@ async fn server_over_tree(base: &std::path::Path, access: Access) -> String {
         store: None,
         agency_for: Some(agency_factory_rooted(base.to_path_buf())),
         describe_for: None,
-        postures: Default::default(),
-        environments: Default::default(),
-        postures_path: None,
     })
     .await
     .expect("binding the server");
@@ -427,34 +417,28 @@ async fn server_everything(
     auth_token_file: Option<std::path::PathBuf>,
     approvers: Approvers,
 ) -> String {
-    server_with_postures(
+    server_choosing(
         replies,
         delay,
         policy,
         budget,
         auth_token_file,
         approvers,
-        Default::default(),
         None,
         None,
     )
     .await
 }
 
-/// The same, with the postures a session may be started on.
-///
-/// Handed in rather than read from `config.toml`, for the reason the server
-/// resolves them once at startup: a test that set `LUU_HOME` would be changing
-/// a process-wide answer that every other test in this binary reads.
+/// The same, with a way to make a session and to say where one would run.
 #[allow(clippy::too_many_arguments)]
-async fn server_with_postures(
+async fn server_choosing(
     replies: Vec<String>,
     delay: Duration,
     policy: SandboxPolicy,
     budget: Budget,
     auth_token_file: Option<std::path::PathBuf>,
     approvers: Approvers,
-    postures: std::collections::BTreeMap<String, luu::provider::Posture>,
     // A store, for the tests that need a session to outlive the one that is
     // live — which is every test about what a *resume* is allowed to do.
     store: Option<std::path::PathBuf>,
@@ -505,9 +489,6 @@ async fn server_with_postures(
         store,
         agency_for: Some(agency_factory()),
         describe_for: Some(describe_factory()),
-        postures,
-        environments: Default::default(),
-        postures_path: Some("config.toml".into()),
         // As the agency above says: a test never reads the `config.toml` of
         // whoever runs it.
         max_tool_steps: Some(4),
@@ -1086,162 +1067,53 @@ async fn the_terminal_opens_where_the_session_runs_and_only_for_this_page() {
     let _ = socket.close(None).await;
 }
 
-/// The live session moves to another posture between jobs, and never inside
-/// one.
-///
-/// What went wrong when a posture moved under a session was something
-/// approved under one carried into another — so a proposal at the gate and an
-/// approved job are refusals, and a session with neither moves and says where
-/// it went. See `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+/// A session is not moved by name: the route that did it is gone, and what
+/// the page is offered is where a session may run — this machine, and each
+/// image on every container runtime — with no posture and no environment in
+/// it. See `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
 #[tokio::test]
-async fn the_live_session_moves_between_postures_between_jobs() {
-    let dir = std::env::temp_dir().join(format!("luu-move-posture-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a directory for the policy file");
-    let policy = dir.join("wide.toml");
-    std::fs::write(
-        &policy,
-        "[sandbox]\nnetwork = true\n\n[[sandbox.paths]]\npath = \".\"\naccess = \"read-write\"\n",
-    )
-    .expect("a policy file");
-    // A contained posture too, for its variants. The test factory never
-    // starts its worker; only what the routes decide is under test.
-    let boxed = dir.join("boxed.toml");
-    std::fs::write(
-        &boxed,
-        "[worker]\nruntime = \"podman\"\nimage = \"luu-worker:dev\"\n",
-    )
-    .expect("a policy file");
-    let mut postures = std::collections::BTreeMap::new();
-    postures.insert(
-        "wide".to_string(),
-        luu::provider::Posture {
-            policy: policy.clone(),
-        },
-    );
-    postures.insert(
-        "boxed".to_string(),
-        luu::provider::Posture { policy: boxed },
-    );
-    let address = server_with_postures(
+async fn a_session_is_offered_places_and_never_names() {
+    let address = server_choosing(
         vec![PLAN.into(), ANSWER.into()],
         Duration::ZERO,
         SandboxPolicy::default(),
         Budget::new(0, 0, Eviction::Turn),
         None,
         Approvers::default(),
-        postures,
         None,
         None,
     )
     .await;
     let client = reqwest::Client::new();
-    let mv = |posture: Value| {
-        client
-            .put(format!("http://{address}/api/session/posture"))
-            .json(&serde_json::json!({ "posture": posture }))
-            .send()
-    };
 
-    // Each posture is named by where it would run, read from its file
-    // without starting anything — the terminal's picker.
     let offered = get(&address, "/api/postures").await;
-    assert_eq!(offered["places"]["wide"][0]["runtime"], "host", "{offered}");
-    // A host posture has no variants: its paths are on this machine.
-    assert_eq!(
-        offered["places"]["wide"].as_array().map(Vec::len),
-        Some(1),
-        "{offered}"
-    );
-    assert!(offered["own"][0]["runtime"].is_string(), "{offered}");
-    // A contained one is offered on every container runtime, its own first.
-    let boxed = &offered["places"]["boxed"];
-    let runtimes: Vec<&str> = boxed
-        .as_array()
-        .expect("variants")
-        .iter()
-        .filter_map(|place| place["runtime"].as_str())
-        .collect();
-    assert_eq!(
-        runtimes,
-        ["podman", "docker", "nerdctl", "colima", "container"],
-        "{offered}"
+    assert_eq!(offered["choosable"], true, "{offered}");
+    assert_eq!(offered["runtimes"][0]["runtime"], "host", "{offered}");
+    for gone in ["postures", "environments", "places", "own", "running"] {
+        assert!(offered.get(gone).is_none(), "{gone} is offered: {offered}");
+    }
+
+    let moved = client
+        .put(format!("http://{address}/api/session/posture"))
+        .json(&serde_json::json!({ "posture": "wide" }))
+        .send()
+        .await
+        .expect("sent");
+    assert!(
+        matches!(moved.status().as_u16(), 404 | 405),
+        "the move by name is gone: {}",
+        moved.status()
     );
 
-    // A variant is a word out of five, and only between containers.
-    let vary = |posture: &str, runtime: &str| {
+    // A runtime that is not one, and a container with no image named on this
+    // machine, are refused before anything moves.
+    let to = |runtime: &'static str| {
         client
-            .put(format!("http://{address}/api/session/posture"))
-            .json(&serde_json::json!({ "posture": posture, "runtime": runtime }))
+            .put(format!("http://{address}/api/session/runtime"))
+            .json(&serde_json::json!({ "runtime": runtime }))
             .send()
     };
-    let to_host = vary("boxed", "host").await.expect("sent");
-    assert_eq!(to_host.status(), 400);
-    assert!(
-        to_host
-            .text()
-            .await
-            .unwrap()
-            .contains("not a container runtime")
-    );
-    let host_boxed = vary("wide", "docker").await.expect("sent");
-    assert_eq!(host_boxed.status(), 400);
-    assert!(
-        host_boxed
-            .text()
-            .await
-            .unwrap()
-            .contains("only a contained posture")
-    );
-    assert_eq!(vary("boxed", "lxc").await.expect("sent").status(), 400);
-
-    let moved = mv("wide".into()).await.expect("sent");
-    assert_eq!(moved.status(), 200);
-    assert_eq!(moved.json::<Value>().await.unwrap()["moved"], true);
-    let settings = get(&address, "/api/settings").await;
-    assert_eq!(settings["posture"]["name"], "wide");
-    assert_eq!(settings["posture"]["network"], true, "{settings}");
-    // The fold says so too, which is what a store and an export read.
-    let sessions = get(&address, "/api/sessions/live").await;
-    assert_eq!(sessions["posture"]["name"], "wide", "{sessions}");
-
-    // Where it already is: nothing to write.
-    let again = mv("wide".into()).await.expect("sent");
-    assert_eq!(again.json::<Value>().await.unwrap()["moved"], false);
-    // A name the file does not have is refused, and moves nothing.
-    assert_eq!(mv("nope".into()).await.expect("sent").status(), 400);
-    // And back to the server's own.
-    assert_eq!(mv(Value::Null).await.expect("sent").status(), 200);
-    assert_eq!(
-        get(&address, "/api/settings").await["posture"]["network"],
-        false
-    );
-
-    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
-        .await
-        .expect("the websocket handshake");
-    send(
-        &mut socket,
-        serde_json::json!({"type": "prompt", "text": "add a flag"}),
-    )
-    .await;
-    until(&mut socket, "plan_proposed").await;
-    let at_the_gate = mv("wide".into()).await.expect("sent");
-    assert_eq!(at_the_gate.status(), 409);
-    assert!(at_the_gate.text().await.unwrap().contains("gate"));
-
-    send(&mut socket, serde_json::json!({"type": "approve_plan"})).await;
-    let (approved, _) = until(&mut socket, "job_approved").await;
-    let inside = mv("wide".into()).await.expect("sent");
-    assert_eq!(inside.status(), 409);
-    let said = inside.text().await.unwrap();
-    assert!(said.contains(&format!("job {}", approved["job"])), "{said}");
-    // Refused means unmoved.
-    assert_eq!(
-        get(&address, "/api/settings").await["posture"]["network"],
-        false
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_ne!(to("lxc").await.expect("sent").status(), 200);
 }
 
 /// The token gates authority and the read side, and does not gate the page.
@@ -3390,248 +3262,96 @@ async fn a_server_with_nowhere_to_send_says_so() {
 /// The happy path is not here for the reason the write route's is not: it needs
 /// a `config.toml` on the machine running the tests. What this pins is that the
 /// route reads the file at all, and that a refusal leaves the session alone.
-/// A posture is a name in `config.toml`, and one the file does not carry is
-/// refused *before* anything is reset — the same rule a provider gets, and for
-/// the same reason: the session that is running should not end because the next
-/// one could not start. See
-/// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+/// A session is not started by name: a body that still names a posture is
+/// refused, saying what a session is made from, *before* anything is reset —
+/// rather than handed a session on empty lists it did not ask for. See
+/// `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
 #[tokio::test]
-async fn a_session_may_not_name_a_posture_that_is_not_in_the_file() {
-    let address = server().await;
-    let client = reqwest::Client::new();
-
-    let refused = client
-        .post(format!("http://{address}/api/sessions"))
-        .json(&serde_json::json!({ "posture": "no-such-posture" }))
-        .send()
-        .await
-        .expect("asking for a session on a posture that does not exist");
-    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
-    let said = refused.text().await.expect("a reason");
-    assert!(said.contains("no-such-posture"), "{said}");
-
-    // And what the session may do is untouched: the refusal happens before
-    // anything is reset.
-    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
-        .await
-        .expect("asking for the settings")
-        .json()
-        .await
-        .expect("the settings are JSON");
-    assert_eq!(settings["posture"]["name"], serde_json::Value::Null);
-}
-
-/// The whole of it, end to end: a name, the policy file it points at, and a
-/// session that runs under it and says which.
-#[tokio::test]
-async fn a_session_started_on_a_posture_runs_under_it_and_says_which() {
-    let dir = std::env::temp_dir().join(format!("luu-posture-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("a directory for the policy file");
-    let policy = dir.join("wide.toml");
-    // Wider than the server's own in the two ways a reader compares postures
-    // on, so "which one is in force" is answerable from the outside.
-    std::fs::write(
-        &policy,
-        "[sandbox]\nnetwork = true\ncommands = [\"ls\"]\n\n         [[sandbox.paths]]\npath = \".\"\naccess = \"read-write\"\n",
-    )
-    .expect("a policy file");
-    let mut postures = std::collections::BTreeMap::new();
-    postures.insert(
-        "wide".to_string(),
-        luu::provider::Posture {
-            policy: policy.clone(),
-        },
-    );
-
-    let address = server_with_postures(
-        vec![PLAN.into(), ANSWER.into()],
-        Duration::ZERO,
-        SandboxPolicy::default(),
-        Budget::new(0, 0, Eviction::Turn),
-        None,
-        Approvers::default(),
-        postures,
-        None,
-        None,
-    )
-    .await;
-    let client = reqwest::Client::new();
-
-    let before: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
-        .await
-        .expect("asking for the settings")
-        .json()
-        .await
-        .expect("the settings are JSON");
-    assert_eq!(before["posture"]["network"], false, "the server's own");
-    // The key is there and it is null. A reader that cannot tell an absent key
-    // from an absent posture is one that will get it wrong, and the check in
-    // `scripts/container-check.sh` is exactly that reader.
-    assert!(
-        before["posture"]
-            .as_object()
-            .expect("a posture")
-            .contains_key("name"),
-        "the name is always written: {before}",
-    );
-    assert_eq!(before["posture"]["name"], serde_json::Value::Null);
-
-    // The page asks what may be chosen first. Read-only, because a page that
-    // could write a posture could widen its own sandbox.
-    let offered: serde_json::Value = reqwest::get(format!("http://{address}/api/postures"))
-        .await
-        .expect("asking what may be chosen")
-        .json()
-        .await
-        .expect("the postures are JSON");
-    assert!(offered["choosable"].as_bool().expect("a surface answers"));
-    assert!(offered["postures"]["wide"].is_object(), "{offered}");
-
-    let created = client
-        .post(format!("http://{address}/api/sessions"))
-        .json(&serde_json::json!({ "posture": "wide" }))
-        .send()
-        .await
-        .expect("starting a session on it");
-    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
-
-    let after: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
-        .await
-        .expect("asking for the settings")
-        .json()
-        .await
-        .expect("the settings are JSON");
-    assert_eq!(after["posture"]["name"], "wide");
-    assert_eq!(
-        after["posture"]["network"], true,
-        "the policy file the posture named is the one in force: {after}",
-    );
-    assert!(
-        after["sandbox"]
-            .as_str()
-            .expect("the resolved sandbox")
-            .contains("ls"),
-        "the commands are the posture's: {after}",
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A posture is chosen when a session starts and a resume may not move it.
-///
-/// Which is what `luu-design.md` has said since 2026-09-08, and what the tree
-/// did not do: the endpoint refused a *named* posture and then inherited a
-/// different one silently, so a proposal left open under a container came back
-/// at the gate on whatever the server happened to be running. See
-/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`.
-#[tokio::test]
-async fn a_resume_keeps_the_posture_a_sessions_jobs_were_approved_under() {
-    let dir = std::env::temp_dir().join(format!("luu-resume-posture-{}", std::process::id()));
+async fn a_session_is_not_started_by_name() {
+    let dir = std::env::temp_dir().join(format!("luu-by-name-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
-    let policy = dir.join("wide.toml");
-    std::fs::write(&policy, "[sandbox]\nnetwork = true\ncommands = [\"ls\"]\n")
-        .expect("writing the posture's policy file");
-
-    let mut postures = std::collections::BTreeMap::new();
-    postures.insert(
-        "wide".to_string(),
-        luu::provider::Posture {
-            policy: policy.clone(),
-        },
-    );
-
-    let address = server_with_postures(
+    let address = server_choosing(
         vec![PLAN.into(), ANSWER.into()],
         Duration::ZERO,
         SandboxPolicy::default(),
         Budget::new(0, 0, Eviction::Turn),
         None,
         Approvers::default(),
-        postures,
         Some(dir.join("sessions.db")),
         None,
     )
     .await;
     let client = reqwest::Client::new();
+    let before = get(&address, "/api/settings").await["posture"].clone();
 
-    // One session on `wide`, and a second on nothing — which checkpoints the
-    // first into the store and leaves the server on its own policy file.
-    let created: serde_json::Value = client
+    let refused = client
         .post(format!("http://{address}/api/sessions"))
         .json(&serde_json::json!({ "posture": "wide" }))
         .send()
         .await
-        .expect("starting a session on it")
-        .json()
-        .await
-        .expect("the summary is JSON");
-    let contained = created["id"].as_str().expect("an id").to_string();
+        .expect("asking for a session on a posture");
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+    let said = refused.text().await.expect("a reason");
+    assert!(
+        said.contains("wide") && said.contains("not started by name"),
+        "{said}"
+    );
+    // And what the session may do is untouched.
+    assert_eq!(get(&address, "/api/settings").await["posture"], before);
 
-    let created = client
+    // A list the file does not have is refused the same way, by its table.
+    let refused = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({ "lists": { "shell": "no-such-list-in-any-file" } }))
+        .send()
+        .await
+        .expect("asking for a list that does not exist");
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+    let said = refused.text().await.expect("a reason");
+    assert!(said.contains("[shell.no-such-list-in-any-file]"), "{said}");
+
+    // Nothing named is a session, and it says what it was made from.
+    let created: serde_json::Value = client
         .post(format!("http://{address}/api/sessions"))
         .json(&serde_json::json!({}))
         .send()
         .await
-        .expect("starting a second session");
-    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
-
-    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
-        .await
-        .expect("asking for the settings")
+        .expect("starting a session")
         .json()
         .await
-        .expect("the settings are JSON");
-    assert_eq!(
-        settings["posture"]["network"], false,
-        "the server is back on its own policy file: {settings}",
-    );
+        .expect("the summary is JSON");
+    let id = created["id"].as_str().expect("an id").to_string();
+    let settings = get(&address, "/api/settings").await;
+    assert_eq!(settings["posture"]["name"], "empty", "{settings}");
+    assert_eq!(settings["posture"]["network"], false, "{settings}");
 
-    // Still live beside the new one, it is not rebuilt anywhere: it keeps the
-    // posture its jobs were approved under, and the rule below is about a
-    // session that has to be made again. So it is put to sleep first
-    // (`RECORD/2026-10-30.sessions-side-by-side.completed.md`).
+    // A resume is not by name either.
+    let second = client
+        .post(format!("http://{address}/api/sessions"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .expect("a second session, which checkpoints the first");
+    assert_eq!(second.status(), reqwest::StatusCode::CREATED);
     let slept = client
-        .delete(format!("http://{address}/api/sessions/{contained}/live"))
+        .delete(format!("http://{address}/api/sessions/{id}/live"))
         .send()
         .await
         .expect("putting it to sleep");
     assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
-
-    // The one this row exists for. Before this it answered 200 and handed the
-    // session's gate to a sandbox its jobs were never approved against.
     let refused = client
-        .post(format!("http://{address}/api/sessions/{contained}/resume"))
-        .send()
-        .await
-        .expect("resuming a session stored under another posture");
-    assert_eq!(refused.status(), reqwest::StatusCode::CONFLICT);
-    let said = refused.text().await.expect("a reason");
-    assert!(
-        said.contains("wide") && said.contains("approved"),
-        "the refusal names the posture and why: {said}",
-    );
-
-    // And it is not a dead end: naming the posture the session ran under
-    // resumes it, because that is the one its jobs were approved against.
-    let resumed = client
-        .post(format!("http://{address}/api/sessions/{contained}/resume"))
+        .post(format!("http://{address}/api/sessions/{id}/resume"))
         .json(&serde_json::json!({ "posture": "wide" }))
         .send()
         .await
-        .expect("resuming it where it belongs");
+        .expect("resuming it by name");
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+    let resumed = client
+        .post(format!("http://{address}/api/sessions/{id}/resume"))
+        .send()
+        .await
+        .expect("resuming it");
     assert_eq!(resumed.status(), reqwest::StatusCode::OK);
-
-    let settings: serde_json::Value = reqwest::get(format!("http://{address}/api/settings"))
-        .await
-        .expect("asking for the settings")
-        .json()
-        .await
-        .expect("the settings are JSON");
-    assert_eq!(settings["posture"]["name"], "wide");
-    assert_eq!(
-        settings["posture"]["network"], true,
-        "the resumed session runs under the posture it was approved against: {settings}",
-    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -4365,27 +4085,15 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
 
     let dir = std::env::temp_dir().join(format!("luu-record-headers-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
-    let policy = dir.join("wide.toml");
-    std::fs::write(&policy, "[sandbox]\nnetwork = true\ncommands = [\"ls\"]\n")
-        .expect("writing the posture's policy file");
     let record = dir.join("run.jsonl");
 
-    let mut postures = std::collections::BTreeMap::new();
-    postures.insert(
-        "wide".to_string(),
-        luu::provider::Posture {
-            policy: policy.clone(),
-        },
-    );
-
-    let address = server_with_postures(
+    let address = server_choosing(
         vec!["an answer".into(), "an answer".into()],
         Duration::ZERO,
         SandboxPolicy::default(),
         Budget::new(0, 0, Eviction::Turn),
         None,
         Approvers::default(),
-        postures,
         Some(dir.join("sessions.db")),
         Some(record.clone()),
     )
@@ -4403,10 +4111,10 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     let client = reqwest::Client::new();
     let created: serde_json::Value = client
         .post(format!("http://{address}/api/sessions"))
-        .json(&serde_json::json!({ "posture": "wide" }))
+        .json(&serde_json::json!({}))
         .send()
         .await
-        .expect("starting a session on the other posture")
+        .expect("starting a second session")
         .json()
         .await
         .expect("the summary is JSON");
@@ -4465,19 +4173,19 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
         "one header per session, and this file holds two",
     );
 
-    let network_of = |line: &RecordLine| match line {
-        RecordLine::Header { posture, .. } => posture.as_ref().map(|one| one.network),
+    let name_of = |line: &RecordLine| match line {
+        RecordLine::Header { posture, .. } => posture.as_ref().and_then(|one| one.name.clone()),
         _ => None,
     };
     assert_eq!(
-        network_of(headers[0]),
-        Some(false),
-        "the first session ran under the server's own policy file",
+        name_of(headers[0]),
+        None,
+        "the first session is the one this test built by hand",
     );
     assert_eq!(
-        network_of(headers[1]),
-        Some(true),
-        "and the second under the posture it was started on",
+        name_of(headers[1]).as_deref(),
+        Some("empty"),
+        "and the second is named by the lists it was made from",
     );
 
     let RecordLine::Header {
@@ -4527,7 +4235,7 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     // resumed session started when it started.
     let third = client
         .post(format!("http://{address}/api/sessions"))
-        .json(&serde_json::json!({ "posture": "wide" }))
+        .json(&serde_json::json!({}))
         .send()
         .await
         .expect("a third session, which checkpoints the second");
@@ -4545,10 +4253,6 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
     assert_eq!(slept.status(), reqwest::StatusCode::NO_CONTENT);
     let resumed = client
         .post(format!("http://{address}/api/sessions/{id}/resume"))
-        // Named here and not inherited: a resume resolves its own posture, and
-        // one that named nothing would be resuming onto the policy file — which
-        // is the refusal item 9 landed.
-        .json(&serde_json::json!({ "posture": "wide" }))
         .send()
         .await
         .expect("resuming it");
@@ -4593,7 +4297,7 @@ async fn a_recording_that_spans_sessions_carries_a_header_for_each() {
 async fn a_turn_at_its_tool_limit_asks_and_a_person_lets_it_go_on() {
     let call = "Looking.\n```tool\n{\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}\n```"
         .to_string();
-    // The budget is 4 (`server_with_postures`): the fifth call is the one past it.
+    // The budget is 4 (`server_choosing`): the fifth call is the one past it.
     let mut replies: Vec<String> = std::iter::repeat_n(call.clone(), 5).collect();
     replies.push("Five listings.".into());
     replies.extend(std::iter::repeat_n(call.clone(), 5));

@@ -16,9 +16,15 @@
 //! (`/api/sessions/*`) already answers plain ungated `GET`s for the same
 //! reason. See `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
 //!
-//! What still bounds it is the sandbox: every path is resolved through
-//! [`Sandbox::check_path`], so this surface can reach exactly what the session's
+//! What still bounds a read is the sandbox: every path is resolved through
+//! [`Sandbox::check_path`], so this surface reads exactly what the session's
 //! own policy grants and nothing above it.
+//!
+//! **A write here is the person's, not the model's.** A rename or a new folder
+//! is somebody working in the page, as its terminal on this machine is, so
+//! it is held to the session's *folder* and not to its files list: what a
+//! list grants is what a tool may do. See [`inside`] and
+//! `RECORD/2026-11-10.a-session-is-a-runtime-and-three-lists.completed.md`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -229,8 +235,9 @@ fn resolve(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
 
 /// A new name for one entry, beside where it is: never a path, so a rename
 /// cannot become a move, and never one that is already taken, so it cannot
-/// overwrite. Both ends go through the sandbox for `read-write`, which is the
-/// check `write_file` makes: a posture that only reads refuses it here too.
+/// overwrite. Both ends are held to the session's folder ([`inside`]) and
+/// not to its files list: a session whose lists only read is still a folder
+/// the person may rename in.
 ///
 /// Answers the entry's new path, relative to the base and `/`-separated, as
 /// [`Entry::path`] spells it.
@@ -247,7 +254,7 @@ pub async fn rename(sandbox: &Sandbox, relative: &str, name: &str) -> Result<Str
             "`{name}` is not a name: it is empty, a dot, or holds a separator"
         )));
     }
-    let from = writable(sandbox, relative)?;
+    let from = inside(sandbox, relative)?;
     if tokio::fs::symlink_metadata(&from).await.is_err() {
         return Err(Error::Missing(format!("{relative}: not found")));
     }
@@ -258,7 +265,7 @@ pub async fn rename(sandbox: &Sandbox, relative: &str, name: &str) -> Result<Str
     if renamed == relative {
         return Ok(renamed);
     }
-    let to = writable(sandbox, &renamed)?;
+    let to = inside(sandbox, &renamed)?;
     // Asked first rather than left to `rename`, which replaces a file that is
     // there on every platform this runs on. A case-only rename on a
     // case-insensitive disk finds *itself* here, and is allowed.
@@ -293,7 +300,7 @@ pub async fn make_dir(sandbox: &Sandbox, parent: &str, name: &str) -> Result<Str
         "" => name.to_string(),
         parent => format!("{parent}/{name}"),
     };
-    let to = writable(sandbox, &made)?;
+    let to = inside(sandbox, &made)?;
     match tokio::fs::create_dir(&to).await {
         Ok(()) => Ok(made),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -306,16 +313,27 @@ pub async fn make_dir(sandbox: &Sandbox, parent: &str, name: &str) -> Result<Str
     }
 }
 
-/// A path the sandbox grants `read-write` on, resolved as [`resolve`] does.
-fn writable(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
-    let check = sandbox.check_path(&sandbox.base().join(relative), Access::ReadWrite);
-    if !check.verdict.allowed {
-        return Err(Error::Refused(format!(
-            "{relative}: {}",
-            check.verdict.rule
-        )));
+/// A path under the session's folder, for a change the person makes there:
+/// the folder it is in resolved — symlinks and `..` — and required to be the
+/// base or under it, and the entry's own name kept as it is, so a link is
+/// renamed rather than what it points at. The base is the wall: a user's
+/// folder for a user, the folder the session was started in otherwise.
+fn inside(sandbox: &Sandbox, relative: &str) -> Result<PathBuf, Error> {
+    let outside = || Error::Refused(format!("{relative}: outside this session's folder"));
+    let base = sandbox.base();
+    let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let joined = base.join(relative);
+    let (Some(parent), Some(name)) = (joined.parent(), joined.file_name()) else {
+        return Err(outside());
+    };
+    let parent = parent.canonicalize().map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => Error::Missing(format!("{relative}: not found")),
+        _ => Error::Failed(format!("{relative}: {error}")),
+    })?;
+    if !parent.starts_with(&base) {
+        return Err(outside());
     }
-    Ok(check.path)
+    Ok(parent.join(name))
 }
 
 /// Whether two `stat`s are one entry on disk.
@@ -877,8 +895,10 @@ mod tests {
     }
 
     /// A file and a folder take a new name beside where they are; a name that
-    /// is taken, a path for a name, the base itself and a posture that only
-    /// reads are each refused, and nothing on disk moves for any of them.
+    /// is taken, a path for a name and the base itself are each refused, and
+    /// nothing on disk moves for any of them. A session whose lists only read
+    /// renames all the same — it is the person's — and never past its folder,
+    /// by a link either.
     #[tokio::test]
     async fn an_entry_is_renamed_in_place_and_nothing_else_is() {
         let root = std::env::temp_dir().join(format!("luu-rename-{}", std::process::id()));
@@ -932,26 +952,49 @@ mod tests {
             Err(Error::Refused(_))
         ));
 
-        // A posture that only reads cannot rename, whatever the name. Its rules
-        // replaced rather than added to: the default grants `read-write` on
-        // `.`, and a rule beside it would not take that away.
+        // A session whose lists only read: the rename is the person's, and
+        // goes through. Its rules replaced rather than added to: the default
+        // grants `read-write` on `.`.
         let reading = agent_core::sandbox::SandboxPolicy {
             paths: vec![agent_core::sandbox::PathRule::new(&root, Access::Read)],
             ..Default::default()
         };
         let reading = Sandbox::new(&reading, &root).unwrap();
-        assert!(matches!(
-            rename(&reading, "src/c.rs", "d.rs").await,
-            Err(Error::Refused(_))
-        ));
-        assert!(root.join("src/c.rs").exists());
+        assert_eq!(
+            rename(&reading, "src/c.rs", "d.rs").await.unwrap(),
+            "src/d.rs"
+        );
+        assert!(root.join("src/d.rs").exists());
+
+        // The folder is the wall, through a link as well as through `..`.
+        #[cfg(unix)]
+        {
+            let elsewhere = root.with_extension("elsewhere");
+            let _ = std::fs::remove_dir_all(&elsewhere);
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::fs::write(elsewhere.join("theirs.txt"), "theirs").unwrap();
+            std::os::unix::fs::symlink(&elsewhere, root.join("way-out")).unwrap();
+            assert!(matches!(
+                rename(&reading, "way-out/theirs.txt", "mine.txt").await,
+                Err(Error::Refused(_))
+            ));
+            assert!(elsewhere.join("theirs.txt").exists());
+            assert!(matches!(
+                make_dir(&reading, "way-out", "made").await,
+                Err(Error::Refused(_))
+            ));
+            assert!(!elsewhere.join("made").exists());
+            // The link itself is an entry of the folder, and is renamed.
+            assert_eq!(rename(&reading, "way-out", "door").await.unwrap(), "door");
+            let _ = std::fs::remove_dir_all(&elsewhere);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A new folder is one level, under the base or a folder in it; a name
     /// already there — a folder or a file — is taken and left alone, a path
-    /// for a name and a way out are refused, and a posture that only reads
-    /// makes nothing.
+    /// for a name and a way out are refused, and a session whose lists only
+    /// read makes one all the same.
     #[tokio::test]
     async fn a_folder_is_made_once_and_only_inside() {
         let root = std::env::temp_dir().join(format!("luu-mkdir-{}", std::process::id()));
@@ -1004,11 +1047,8 @@ mod tests {
             ..Default::default()
         };
         let reading = Sandbox::new(&reading, &root).unwrap();
-        assert!(matches!(
-            make_dir(&reading, "", "nope").await,
-            Err(Error::Refused(_))
-        ));
-        assert!(!root.join("nope").exists());
+        assert_eq!(make_dir(&reading, "", "mine").await.unwrap(), "mine");
+        assert!(root.join("mine").is_dir());
         let _ = std::fs::remove_dir_all(&root);
     }
 

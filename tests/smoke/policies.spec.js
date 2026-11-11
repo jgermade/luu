@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url"
 /**
  * Settings → Policies: the shell, network and files lists, seen and edited,
  * and written to `config.toml` whole. An entry added and saved is in the file;
- * a list an environment names cannot be deleted, and renamed it takes the
- * environment with it; a write the loader refuses is not written, and the
+ * a list is renamed or deleted and nothing else in the file names it; a
+ * write the loader refuses is not written, and the
  * section says why in the loader's words. See
  * `RECORD/2026-10-22.policies-not-postures.WIP.md`.
  */
@@ -34,11 +34,6 @@ allow = ["crates.io"]
 
 [files.tree]
 allow = [{ path = ".", access = "read-write" }]
-
-[environment.asking]
-shell = "tools"
-network = "off"
-files = "tree"
 `
 
 function binary() {
@@ -101,9 +96,8 @@ const file = () => readFileSync(join(home, "config.toml"), "utf8")
  * The new session's dialog: where it runs and which list of each axis, always
  * — no preset to start from, and a list not chosen is the empty one, which
  * reads the folder and asks the rest. The session runs under what was chosen
- * and is resumed made from it again; the next one is offered the same. An
- * environment still takes another list of the file in place of one of its
- * own, through the API. Before the test below, which renames and deletes
+ * and is resumed made from it again; the next one is offered the same. A
+ * session is not started or moved by name. Before the test below, which renames and deletes
  * lists.
  */
 test("a session is made from a runtime and three lists, and comes back made from them", async ({ page }) => {
@@ -153,7 +147,7 @@ test("a session is made from a runtime and three lists, and comes back made from
   expect(made.lists.files.name).toBe("(empty)")
   await say("hola")
 
-  // The Editor's foot names where it runs, though it is no posture: this
+  // The Editor's foot names where it runs: this
   // machine, by its mark — it said "…" until 2026-10-27. Its dialog draws it
   // as where the session is now.
   const foot = page.locator(".content .col-foot")
@@ -168,7 +162,7 @@ test("a session is made from a runtime and three lists, and comes back made from
   // `/api/terminal` says of it: this machine may have no runtime to run one.
   const contained = await page.evaluate(async () => {
     const { hereOption, placeMark } = await import("./lib/places.js")
-    const option = hereOption(null, {
+    const option = hereOption({
       name: "tools+registries",
       runtime: "podman (luu-worker:dev)",
       composed: { runtime: "podman", image: "luu-worker:dev" },
@@ -187,7 +181,7 @@ test("a session is made from a runtime and three lists, and comes back made from
   await select("list-network").selectOption("")
   await dialog.getByRole("button", { name: "Start session" }).click()
   await expect(dialog).toHaveCount(0)
-  expect((await settings()).lists.environment).toBe("empty")
+  expect((await settings()).posture.name).toBe("empty")
 
   // Picked from the history, the first is resumed made from its lists again —
   // from the copy it carries, so `registries` edited since changes nothing
@@ -237,27 +231,27 @@ test("a session is made from a runtime and three lists, and comes back made from
     expect(await answer.text()).toContain(text)
   }
   await refused({ lists: { network: "nope" } }, "there is no [network.nope]")
-  await refused({ runtime: "docker", lists: {} }, "no [image.*], posture or environment in config.toml names one")
+  await refused({ runtime: "docker", lists: {} }, "no [image.*] in config.toml names one")
   await refused({ runtime: "host", image: "luu-worker:dev", lists: {} }, "runs no container")
 
-  // An environment takes another list of the file in place of its own.
-  const swapped = await fetch(`${BASE}/api/sessions`, {
-    method: "POST",
+  // A session is not started by name, and the route that moved one by name
+  // is gone.
+  await refused({ posture: "asking", lists: { network: "registries" } }, "not started by name")
+  const byName = await fetch(`${BASE}/api/session/posture`, {
+    method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ posture: "asking", lists: { network: "registries" } }),
+    body: JSON.stringify({ posture: "asking" }),
   })
-  expect(swapped.ok).toBe(true)
-  const there = await settings()
-  expect(there.lists.environment).toBe("asking")
-  expect(there.lists.composed ?? false).toBe(false)
-  expect(there.lists.network.name).toBe("registries")
+  expect([404, 405]).toContain(byName.status)
 
-  // A session on the server's own policy file carries no lists, and moves by
-  // a posture's name rather than by runtime.
+  // A session that names nothing is made from three empty lists, on this
+  // machine — and carries them, so it moves like any other.
   expect((await fetch(`${BASE}/api/sessions`, { method: "POST" })).ok).toBe(true)
-  const unmovable = await moveTo({ runtime: "direct" })
-  expect(unmovable.status).toBe(409)
-  expect(await unmovable.text()).toContain("PUT /api/session/posture")
+  const nothing = await settings()
+  expect(nothing.posture.name).toBe("empty")
+  expect(nothing.lists.composed).toBe(true)
+  expect(nothing.lists.shell.name).toBe("(empty)")
+  expect((await moveTo({ runtime: "direct" })).ok).toBe(true)
 
   expect(errors).toEqual([])
 })
@@ -291,16 +285,15 @@ test("the lists are edited in Settings and written to config.toml whole", async 
   // The file as the serialiser lays it out: three entries are one a line.
   expect(file()).toMatch(/\[shell\.tools\]\s*allow = \[\s*"ls",\s*"git",\s*"rg",?\s*\]/)
 
-  // A list an environment names cannot be deleted; renamed, the environment
-  // follows it in the same write.
-  await expect(tools.getByRole("button", { name: "Delete" })).toBeDisabled()
+  // Renamed: nothing else in the file names a list, so only its table moves.
+  await expect(tools.getByRole("button", { name: "Delete" })).toBeEnabled()
   await tools.getByRole("button", { name: "Rename" }).click()
   const name = tools.getByRole("textbox", { name: "List name" })
   await name.fill("rust")
   await name.press("Enter")
   const rust = pane.locator(".kind[data-kind='shell'] .list[data-list='rust']")
   await expect(rust).toBeVisible()
-  // One that nothing names goes.
+  // And one deleted goes.
   const registries = pane.locator(".kind[data-kind='network'] .list[data-list='registries']")
   await registries.getByRole("button", { name: "Delete" }).click()
   await expect(registries).toHaveCount(0)
@@ -308,11 +301,13 @@ test("the lists are edited in Settings and written to config.toml whole", async 
   await expect(save).toBeDisabled()
   expect(file()).toContain("[shell.rust]")
   expect(file()).not.toContain("[shell.tools]")
-  expect(file()).toMatch(/\[environment\.asking\][^[]*shell = "rust"/)
+  expect(file()).not.toContain("[environment.")
   expect(file()).not.toContain("[network.registries]")
-  // And the next session is offered it under the new name.
-  const postures = await (await fetch(`${BASE}/api/postures`)).json()
-  expect(postures.environments).toContain("asking")
+  // And the next session is offered where it may run, and no names.
+  const offered = await (await fetch(`${BASE}/api/postures`)).json()
+  expect(offered.environments).toBeUndefined()
+  expect(offered.postures).toBeUndefined()
+  expect(offered.runtimes[0].runtime).toBe("host")
 
   // Two zones: a path is only ever allowed — one denied inside the folder a
   // session reads could not be held for a command yet.

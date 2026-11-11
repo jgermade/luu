@@ -53,7 +53,6 @@ jobs:
       - run: |
           helm template luu deploy/helm/luu \
             --set ingress.enabled=true --set ingress.tls.enabled=true \
-            --set-string policy='[sandbox]' \
             --set persistence.work.existingClaim=work |
             grep -q 'value: "https://luu.example.com"'
       # Traefik's ACME: its two router annotations, a TLS entry naming no
